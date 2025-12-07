@@ -1,0 +1,167 @@
+openapi: 3.1.0
+info:
+  title: Heads-up Poker Bot Simulation - WebSocket Contract
+  version: 0.1.0
+servers:
+  - url: ws://localhost:8080/ws
+    description: Local simulation server
+paths:
+  /ws/table:
+    get:
+      summary: Upgrade connection to the heads-up table stream
+      description: >
+        Performs HTTP upgrade to WebSocket. Server assigns a seat once two bots are connected,
+        then drives hand lifecycle via JSON frames that match the schemas below.
+      responses:
+        "101":
+          description: Switching Protocols (WebSocket upgrade)
+        "429":
+          description: Table already has two active connections
+components:
+  schemas:
+    ClientMessage:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [register, action, pong]
+          description: register to request seat; action when responding to a prompt; pong for keepalive.
+        name:
+          type: string
+          description: Bot identifier; required when type=register.
+        hand_id:
+          type: string
+          description: Target hand for actions; required when type=action.
+        action:
+          $ref: "#/components/schemas/ActionPayload"
+          description: Action payload when type=action.
+    ActionPayload:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [fold, check, call, bet, raise, all_in]
+        amount:
+          type: number
+          format: double
+          description: Chips committed for bet/raise/all_in; omitted for fold/check/call.
+    ServerMessage:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [seat_assigned, hand_start, action_request, action_result, showdown, fold_win, reload, error, keepalive]
+        seat:
+          type: integer
+          minimum: 0
+          maximum: 1
+          description: Seat index for whom the message applies.
+        stack_bb:
+          type: number
+          format: double
+          description: Current stack in big blinds.
+        hand_id:
+          type: string
+        button_seat:
+          type: integer
+          description: Seat holding dealer/button for the hand.
+        blinds:
+          $ref: "#/components/schemas/Blinds"
+        hole_cards:
+          type: array
+          items:
+            type: string
+          description: Sent privately to each seat on hand_start.
+        community_cards:
+          type: array
+          items:
+            type: string
+        street:
+          type: string
+          enum: [preflop, flop, turn, river, showdown]
+        pot_state:
+          $ref: "#/components/schemas/PotState"
+        allowed_actions:
+          type: array
+          items:
+            type: string
+          description: Legal actions for the addressed seat when type=action_request.
+        min_raise_to:
+          type: number
+          format: double
+          description: Minimum total bet required when raise is allowed.
+        timeout_ms:
+          type: integer
+          description: Deadline from receipt before default action (check else fold).
+        action:
+          $ref: "#/components/schemas/ActionPayload"
+          description: Echoes action taken when type=action_result.
+        winners:
+          type: array
+          items:
+            $ref: "#/components/schemas/Winner"
+        error:
+          $ref: "#/components/schemas/ErrorPayload"
+    Blinds:
+      type: object
+      required: [small_blind, big_blind]
+      properties:
+        small_blind:
+          type: number
+          format: double
+        big_blind:
+          type: number
+          format: double
+    PotState:
+      type: object
+      required: [main_pot, contributions]
+      properties:
+        main_pot:
+          type: number
+          format: double
+        side_pots:
+          type: array
+          items:
+            type: object
+            required: [cap, contributors]
+            properties:
+              cap:
+                type: number
+                format: double
+              contributors:
+                type: array
+                items:
+                  type: integer
+        contributions:
+          type: array
+          items:
+            type: number
+          minItems: 2
+          maxItems: 2
+    Winner:
+      type: object
+      required: [seat, amount]
+      properties:
+        seat:
+          type: integer
+        amount:
+          type: number
+          format: double
+        hand_rank:
+          type: string
+          description: Best five-card description (e.g., "flush-ace-high").
+    ErrorPayload:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [invalid_message, out_of_turn, illegal_action, timeout, server_error]
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
