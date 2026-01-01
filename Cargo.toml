@@ -1,0 +1,9 @@
+[package]
+name = "elgamal-koblitz"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+k256 = { version = "0.13", features = ["arithmetic", "ecdsa"] }
+rand = "0.8"
+hex = "0.4"
