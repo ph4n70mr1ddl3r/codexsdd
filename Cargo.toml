@@ -8,6 +8,7 @@ k256 = { version = "0.13", features = ["arithmetic", "ecdsa"] }
 rand = "0.8"
 hex = "0.4"
 sha2 = "0.10"
+thiserror = "1.0"
 
 [dependencies.serde]
 version = "1.0"
