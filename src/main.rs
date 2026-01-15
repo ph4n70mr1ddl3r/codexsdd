@@ -114,7 +114,7 @@ pub struct ShuffleProof {
     pub a: Vec<ProjectivePoint>,
     /// Commitments to beta values (B_i = beta_i * PK_sum)
     pub b: Vec<ProjectivePoint>,
-    /// Response values c_i = alpha_i + e * permutation[i] + r_i
+    /// Response values: `c_i = alpha_i + e * permutation[i] + r_i`
     pub c: Vec<Scalar>,
     /// Random values used in responses
     pub r: Vec<Scalar>,
@@ -734,7 +734,7 @@ mod tests {
 
     #[test]
     fn test_shuffle_preserves_count() {
-        let players: Vec<Player> = (0..2).map(|i| Player::new(i)).collect();
+        let players: Vec<Player> = (0..2).map(Player::new).collect();
         let shuffle = BayerGrothShuffle::new(players.clone());
 
         let ciphertexts: Vec<ElGamalCiphertext> = (0..10)
@@ -754,7 +754,7 @@ mod tests {
 
     #[test]
     fn test_shuffle_verification_success() {
-        let players: Vec<Player> = (0..2).map(|i| Player::new(i)).collect();
+        let players: Vec<Player> = (0..2).map(Player::new).collect();
         let shuffle = BayerGrothShuffle::new(players.clone());
 
         let ciphertexts: Vec<ElGamalCiphertext> = (0..5)
@@ -800,14 +800,14 @@ mod tests {
 
     #[test]
     fn test_public_key_sum() {
-        let players: Vec<Player> = (0..3).map(|i| Player::new(i)).collect();
+        let players: Vec<Player> = (0..3).map(Player::new).collect();
         let sum1 = players
             .iter()
             .fold(ProjectivePoint::IDENTITY, |acc, p| acc + p.public_key());
 
         let mut sum2 = ProjectivePoint::IDENTITY;
         for player in &players {
-            sum2 = sum2 + player.public_key();
+            sum2 += player.public_key();
         }
 
         assert_eq!(sum1, sum2);
