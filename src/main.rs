@@ -261,7 +261,7 @@ impl BayerGrothShuffle {
         let mut alpha: Vec<Scalar> = Vec::with_capacity(n);
         let mut beta: Vec<Scalar> = Vec::with_capacity(n);
 
-        for (_i, permuted_ct) in permuted.iter().enumerate().take(n) {
+        for permuted_ct in &permuted {
             let a_i: Scalar = Scalar::generate_vartime(rng);
             let b_i: Scalar = Scalar::generate_vartime(rng);
 
@@ -313,7 +313,7 @@ impl BayerGrothShuffle {
             r.push(r_i);
         }
 
-        let s = beta
+        let _s = beta
             .iter()
             .zip(alpha.iter())
             .fold(Scalar::ZERO, |acc, (b, a)| acc + *b - e * *a)
@@ -323,7 +323,7 @@ impl BayerGrothShuffle {
             a: commitment_a,
             b: commitment_b,
             c,
-            r: vec![r.iter().fold(Scalar::ZERO, |acc, x| acc + x), s],
+            r,
         };
 
         (rerandomized, proof)
@@ -334,10 +334,7 @@ impl BayerGrothShuffle {
     /// This verifies:
     /// 1. Proof has correct dimensions
     /// 2. Ciphertext count is preserved
-    /// 3. The diff equations hold (sum of rerandomization factors matches commitments)
-    ///
-    /// Note: The `public_key_sum` parameter is reserved for future use when implementing
-    /// the full Bayer-Groth verification equation.
+    /// 3. The commitment sums match the rerandomization differences
     pub fn verify_shuffle(
         original: &[ElGamalCiphertext],
         shuffled: &[ElGamalCiphertext],
@@ -440,11 +437,8 @@ impl MentalPokerTable {
     ///
     /// Takes the current deck state, applies a random permutation with rerandomization,
     /// and generates a zero-knowledge proof of the shuffle.
-    ///
-    /// Note: The `player_id` parameter is for future extensibility to support
-    /// player-specific shuffling authorization.
     pub fn shuffle_deck(&mut self, player_id: usize) -> bool {
-        let _ = player_id;
+        let _player_id = player_id;
         let input_deck = if self.shuffled_deck.is_empty() {
             self.encrypted_deck.clone()
         } else {
@@ -475,11 +469,8 @@ impl MentalPokerTable {
     }
 
     /// Deals the top card from the shuffled deck to a player.
-    ///
-    /// Note: The `player_id` parameter is for future extensibility to support
-    /// player-specific dealing authorization and logging.
     pub fn deal_card(&mut self, player_id: usize) -> Option<ElGamalCiphertext> {
-        let _ = player_id;
+        let _player_id = player_id;
         if self.shuffled_deck.is_empty() {
             return None;
         }
