@@ -88,7 +88,7 @@ impl ElGamal {
     /// - c1 = r * G (random scalar times generator)
     /// - c2 = message + r * public_key
     pub fn encrypt(&self, message: &ProjectivePoint) -> ElGamalCiphertext {
-        let random_scalar: Scalar = Scalar::generate_vartime(&mut OsRng);
+        let random_scalar: Scalar = Scalar::generate_biased(&mut OsRng);
         let c1 = ProjectivePoint::GENERATOR * random_scalar;
         let c2 = *message + (self.keypair.public_key * random_scalar);
         ElGamalCiphertext { c1, c2 }
@@ -168,20 +168,8 @@ impl Deck {
         let mut cards = Vec::with_capacity(DECK_SIZE);
 
         for i in 0..DECK_SIZE {
-            let mut hash = [0u8; 32];
             let card_data = format!("CARD_{}", i);
-            let mut hasher = Sha256::new();
-            hasher.update(card_data.as_bytes());
-            hash.copy_from_slice(&hasher.finalize());
-
-            let mut scalar = Scalar::from_repr_vartime(hash.into()).unwrap();
-            while scalar == Scalar::ZERO || !Self::is_valid_point(&scalar) {
-                hash[0] = hash[0].wrapping_add(1);
-                let mut hasher = Sha256::new();
-                hasher.update(hash);
-                hash.copy_from_slice(&hasher.finalize());
-                scalar = Scalar::from_repr_vartime(hash.into()).unwrap();
-            }
+            let scalar = Self::hash_to_valid_scalar(card_data.as_bytes());
 
             cards.push(ProjectivePoint::GENERATOR * scalar);
         }
@@ -189,9 +177,31 @@ impl Deck {
         Self { cards }
     }
 
-    fn is_valid_point(scalar: &Scalar) -> bool {
-        let point = ProjectivePoint::GENERATOR * scalar;
-        point != ProjectivePoint::IDENTITY
+    fn hash_to_valid_scalar(input: &[u8]) -> Scalar {
+        const MAX_RETRIES: u32 = 256;
+
+        for retry in 0..MAX_RETRIES {
+            let mut hash = [0u8; 32];
+            let mut hasher = Sha256::new();
+            if retry == 0 {
+                hasher.update(input);
+            } else {
+                let mut extended = input.to_vec();
+                extended.extend_from_slice(&retry.to_le_bytes());
+                hasher.update(&extended);
+            }
+            hash.copy_from_slice(&hasher.finalize());
+
+            if let Some(scalar) = Scalar::from_repr(hash.into()).into_option()
+                && scalar != Scalar::ZERO
+            {
+                let point = ProjectivePoint::GENERATOR * scalar;
+                if point != ProjectivePoint::IDENTITY {
+                    return scalar;
+                }
+            }
+        }
+        Scalar::ONE
     }
 
     /// Encrypts all cards in the deck using the provided ElGamal encryptor.
@@ -297,7 +307,8 @@ impl BayerGrothShuffle {
 
         for i in 0..n {
             let r_i: Scalar = Scalar::generate_vartime(rng);
-            let c_i = alpha[i] + e * Scalar::from(permutation[i] as u64) + r_i;
+            let permuted_index = permutation[i];
+            let c_i = alpha[i] + e * Scalar::from(permuted_index as u64) + r_i;
             c.push(c_i);
             r.push(r_i);
         }
@@ -355,16 +366,6 @@ impl BayerGrothShuffle {
         hasher.update(&hash_input);
         let _e = Scalar::from_repr_vartime(hasher.finalize()).unwrap();
 
-        let mut sum_a = ProjectivePoint::IDENTITY;
-        let mut sum_b = ProjectivePoint::IDENTITY;
-        let mut sum_c = Scalar::ZERO;
-
-        for i in 0..n {
-            sum_a += proof.a[i];
-            sum_b += proof.b[i];
-            sum_c += proof.c[i];
-        }
-
         let mut orig_sum_c1 = ProjectivePoint::IDENTITY;
         let mut orig_sum_c2 = ProjectivePoint::IDENTITY;
         let mut shuffled_sum_c1 = ProjectivePoint::IDENTITY;
@@ -382,10 +383,15 @@ impl BayerGrothShuffle {
         let diff_c1 = shuffled_sum_c1 - orig_sum_c1;
         let diff_c2 = shuffled_sum_c2 - orig_sum_c2;
 
-        let expected_diff_c1 = sum_a;
-        let expected_diff_c2 = sum_b;
+        let mut sum_a = ProjectivePoint::IDENTITY;
+        let mut sum_b = ProjectivePoint::IDENTITY;
 
-        diff_c1 == expected_diff_c1 && diff_c2 == expected_diff_c2
+        for i in 0..n {
+            sum_a += proof.a[i];
+            sum_b += proof.b[i];
+        }
+
+        diff_c1 == sum_a && diff_c2 == sum_b
     }
 }
 
