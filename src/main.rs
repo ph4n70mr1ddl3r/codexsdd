@@ -437,13 +437,6 @@ impl MentalPokerTable {
         }
     }
 
-    /// Collects and sums all players' public keys.
-    pub fn collect_public_keys(&self) -> ProjectivePoint {
-        self.players
-            .iter()
-            .fold(ProjectivePoint::IDENTITY, |acc, p| acc + p.public_key())
-    }
-
     /// Shuffles the deck using the Bayer-Groth shuffle protocol.
     ///
     /// Takes the current deck state, applies a random permutation with rerandomization,
@@ -487,10 +480,7 @@ impl MentalPokerTable {
         let proof = self.shuffle_proofs.last().unwrap();
         let shuffled: Vec<ElGamalCiphertext> = self.shuffled_deck.iter().cloned().collect();
 
-        match BayerGrothShuffle::verify_shuffle(input, &shuffled, proof) {
-            Ok(result) => result,
-            Err(_) => false,
-        }
+        BayerGrothShuffle::verify_shuffle(input, &shuffled, proof).unwrap_or_default()
     }
 
     /// Deals the top card from the shuffled deck to a player.
@@ -557,19 +547,20 @@ fn run_mental_poker_simulation() {
 
         println!("    Deck size: {} -> {}", before_count, after_count);
 
-        let proof = table.shuffle_proofs.last().unwrap();
-        println!(
-            "    Proof size: {} commitments, {} responses",
-            proof.a.len() + proof.b.len(),
-            proof.r.len()
-        );
+        if let Some(proof) = table.shuffle_proofs.last() {
+            println!(
+                "    Proof size: {} commitments, {} responses",
+                proof.a.len() + proof.b.len(),
+                proof.r.len()
+            );
 
-        let _is_valid = table.verify_last_shuffle();
-        println!(
-            "    Proof generated: {} commitments, {} responses\n",
-            proof.a.len() + proof.b.len(),
-            proof.r.len()
-        );
+            let _is_valid = table.verify_last_shuffle();
+            println!(
+                "    Proof generated: {} commitments, {} responses\n",
+                proof.a.len() + proof.b.len(),
+                proof.r.len()
+            );
+        }
     }
 
     println!("=== 3. DEALING PHASE ===\n");
@@ -670,8 +661,8 @@ fn run_mental_poker_simulation() {
     println!("  BAYER-GROTH SHUFFLE VERIFICATION");
     println!("========================================\n");
 
-    let players: Vec<Player> = (0..2).map(Player::new).collect();
-    let shuffle = BayerGrothShuffle::new(players);
+    let test_players: Vec<Player> = (0..2).map(Player::new).collect();
+    let shuffle = BayerGrothShuffle::new(test_players);
     let test_ciphertexts: Vec<ElGamalCiphertext> = (0..5)
         .map(|_| {
             let msg = ProjectivePoint::GENERATOR * Scalar::generate_biased(&mut OsRng);
