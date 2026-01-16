@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 
 const DECK_SIZE: usize = 52;
+const COMPRESSED_POINT_SIZE: usize = 33;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MentalPokerError {
@@ -159,6 +160,29 @@ impl Default for Deck {
     }
 }
 
+fn build_hash_input(
+    ciphertexts: &[ElGamalCiphertext],
+    commitments_a: &[ProjectivePoint],
+    commitments_b: &[ProjectivePoint],
+) -> Vec<u8> {
+    let n = ciphertexts.len();
+    let total_size = n * COMPRESSED_POINT_SIZE * 2 + n * COMPRESSED_POINT_SIZE * 2;
+    let mut hash_input = Vec::with_capacity(total_size);
+
+    for ct in ciphertexts {
+        hash_input.extend_from_slice(&ct.c1.to_bytes());
+        hash_input.extend_from_slice(&ct.c2.to_bytes());
+    }
+    for pt in commitments_a {
+        hash_input.extend_from_slice(&pt.to_bytes());
+    }
+    for pt in commitments_b {
+        hash_input.extend_from_slice(&pt.to_bytes());
+    }
+
+    hash_input
+}
+
 impl Deck {
     /// Creates a new deck of 52 cards, each mapped to a unique curve point.
     ///
@@ -249,13 +273,13 @@ impl BayerGrothShuffle {
         rng: &mut R,
     ) -> (Vec<ElGamalCiphertext>, ShuffleProof) {
         let n = ciphertexts.len();
-        let shuffled = ciphertexts.to_vec();
-
         let mut permutation: Vec<usize> = (0..n).collect();
         permutation.shuffle(rng);
 
-        let permuted: Vec<ElGamalCiphertext> =
-            permutation.iter().map(|&i| shuffled[i].clone()).collect();
+        let permuted: Vec<ElGamalCiphertext> = permutation
+            .iter()
+            .map(|&i| ciphertexts[i].clone())
+            .collect();
 
         let mut rerandomized: Vec<ElGamalCiphertext> = Vec::with_capacity(n);
         let mut alpha: Vec<Scalar> = Vec::with_capacity(n);
@@ -284,44 +308,15 @@ impl BayerGrothShuffle {
 
         let commitment_b: Vec<ProjectivePoint> = beta.iter().map(|b| public_key_sum * b).collect();
 
-        let mut hash_input = Vec::new();
-        for ct in &rerandomized {
-            hash_input.extend_from_slice(&ct.c1.to_bytes());
-            hash_input.extend_from_slice(&ct.c2.to_bytes());
-        }
-        for pt in &commitment_a {
-            hash_input.extend_from_slice(&pt.to_bytes());
-        }
-        for pt in &commitment_b {
-            hash_input.extend_from_slice(&pt.to_bytes());
-        }
-
-        let mut hasher = Sha256::new();
-        hasher.update(&hash_input);
-        let challenge_hash = hasher.finalize();
-        let _e = Scalar::from_repr_vartime(challenge_hash).unwrap();
-
-        let mut c: Vec<Scalar> = Vec::with_capacity(n);
-        let mut r: Vec<Scalar> = Vec::with_capacity(n);
-
-        let hash_input_len = n * 64 + n * 33 * 2;
-        let mut hash_input = Vec::with_capacity(hash_input_len);
-
-        for ct in &rerandomized {
-            hash_input.extend_from_slice(&ct.c1.to_bytes());
-            hash_input.extend_from_slice(&ct.c2.to_bytes());
-        }
-        for pt in &commitment_a {
-            hash_input.extend_from_slice(&pt.to_bytes());
-        }
-        for pt in &commitment_b {
-            hash_input.extend_from_slice(&pt.to_bytes());
-        }
+        let hash_input = build_hash_input(&rerandomized, &commitment_a, &commitment_b);
 
         let mut hasher = Sha256::new();
         hasher.update(&hash_input);
         let challenge_hash = hasher.finalize();
         let e = Scalar::from_repr_vartime(challenge_hash).unwrap_or(Scalar::ONE);
+
+        let mut c: Vec<Scalar> = Vec::with_capacity(n);
+        let mut r: Vec<Scalar> = Vec::with_capacity(n);
 
         for i in 0..n {
             let r_i: Scalar = Scalar::generate_biased(&mut OsRng);
@@ -359,19 +354,7 @@ impl BayerGrothShuffle {
             return Err(MentalPokerError::InvalidCommitmentLength);
         }
 
-        let hash_input_len = n * 64 + n * 33 * 2;
-        let mut hash_input = Vec::with_capacity(hash_input_len);
-
-        for ct in shuffled {
-            hash_input.extend_from_slice(&ct.c1.to_bytes());
-            hash_input.extend_from_slice(&ct.c2.to_bytes());
-        }
-        for pt in &proof.a {
-            hash_input.extend_from_slice(&pt.to_bytes());
-        }
-        for pt in &proof.b {
-            hash_input.extend_from_slice(&pt.to_bytes());
-        }
+        let hash_input = build_hash_input(shuffled, &proof.a, &proof.b);
 
         let mut hasher = Sha256::new();
         hasher.update(&hash_input);
