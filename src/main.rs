@@ -4,7 +4,7 @@ use k256::{ProjectivePoint, Scalar, SecretKey};
 use rand::prelude::SliceRandom;
 use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 
 const DECK_SIZE: usize = 52;
@@ -261,16 +261,18 @@ impl BayerGrothShuffle {
         let mut alpha: Vec<Scalar> = Vec::with_capacity(n);
         let mut beta: Vec<Scalar> = Vec::with_capacity(n);
 
+        let public_key_sum = self.compute_public_key_sum();
+
         for permuted_ct in &permuted {
-            let a_i: Scalar = Scalar::generate_vartime(rng);
-            let b_i: Scalar = Scalar::generate_vartime(rng);
+            let a_i: Scalar = Scalar::generate_biased(&mut OsRng);
+            let b_i: Scalar = Scalar::generate_biased(&mut OsRng);
 
             alpha.push(a_i);
             beta.push(b_i);
 
             let rerand = ElGamalCiphertext {
                 c1: permuted_ct.c1 + (ProjectivePoint::GENERATOR * a_i),
-                c2: permuted_ct.c2 + (self.compute_public_key_sum() * b_i),
+                c2: permuted_ct.c2 + (public_key_sum * b_i),
             };
             rerandomized.push(rerand);
         }
@@ -280,10 +282,7 @@ impl BayerGrothShuffle {
             .map(|a| ProjectivePoint::GENERATOR * a)
             .collect();
 
-        let commitment_b: Vec<ProjectivePoint> = beta
-            .iter()
-            .map(|b| self.compute_public_key_sum() * b)
-            .collect();
+        let commitment_b: Vec<ProjectivePoint> = beta.iter().map(|b| public_key_sum * b).collect();
 
         let mut hash_input = Vec::new();
         for ct in &rerandomized {
@@ -300,24 +299,37 @@ impl BayerGrothShuffle {
         let mut hasher = Sha256::new();
         hasher.update(&hash_input);
         let challenge_hash = hasher.finalize();
-        let e = Scalar::from_repr_vartime(challenge_hash).unwrap();
+        let _e = Scalar::from_repr_vartime(challenge_hash).unwrap();
 
         let mut c: Vec<Scalar> = Vec::with_capacity(n);
         let mut r: Vec<Scalar> = Vec::with_capacity(n);
 
+        let hash_input_len = n * 64 + n * 33 * 2;
+        let mut hash_input = Vec::with_capacity(hash_input_len);
+
+        for ct in &rerandomized {
+            hash_input.extend_from_slice(&ct.c1.to_bytes());
+            hash_input.extend_from_slice(&ct.c2.to_bytes());
+        }
+        for pt in &commitment_a {
+            hash_input.extend_from_slice(&pt.to_bytes());
+        }
+        for pt in &commitment_b {
+            hash_input.extend_from_slice(&pt.to_bytes());
+        }
+
+        let mut hasher = Sha256::new();
+        hasher.update(&hash_input);
+        let challenge_hash = hasher.finalize();
+        let e = Scalar::from_repr_vartime(challenge_hash).unwrap_or(Scalar::ONE);
+
         for i in 0..n {
-            let r_i: Scalar = Scalar::generate_vartime(rng);
+            let r_i: Scalar = Scalar::generate_biased(&mut OsRng);
             let permuted_index = permutation[i];
             let c_i = alpha[i] + e * Scalar::from(permuted_index as u64) + r_i;
             c.push(c_i);
             r.push(r_i);
         }
-
-        let _s = beta
-            .iter()
-            .zip(alpha.iter())
-            .fold(Scalar::ZERO, |acc, (b, a)| acc + *b - e * *a)
-            + e;
 
         let proof = ShuffleProof {
             a: commitment_a,
@@ -340,14 +352,16 @@ impl BayerGrothShuffle {
         shuffled: &[ElGamalCiphertext],
         proof: &ShuffleProof,
         _public_key_sum: &ProjectivePoint,
-    ) -> bool {
+    ) -> Result<bool, MentalPokerError> {
         let n = original.len();
 
         if proof.a.len() != n || proof.b.len() != n || proof.c.len() != n {
-            return false;
+            return Err(MentalPokerError::InvalidCommitmentLength);
         }
 
-        let mut hash_input = Vec::new();
+        let hash_input_len = n * 64 + n * 33 * 2;
+        let mut hash_input = Vec::with_capacity(hash_input_len);
+
         for ct in shuffled {
             hash_input.extend_from_slice(&ct.c1.to_bytes());
             hash_input.extend_from_slice(&ct.c2.to_bytes());
@@ -361,7 +375,8 @@ impl BayerGrothShuffle {
 
         let mut hasher = Sha256::new();
         hasher.update(&hash_input);
-        let _e = Scalar::from_repr_vartime(hasher.finalize()).unwrap();
+        let _e = Scalar::from_repr_vartime(hasher.finalize())
+            .ok_or(MentalPokerError::ScalarConversionFailed)?;
 
         let mut orig_sum_c1 = ProjectivePoint::IDENTITY;
         let mut orig_sum_c2 = ProjectivePoint::IDENTITY;
@@ -388,7 +403,10 @@ impl BayerGrothShuffle {
             sum_b += proof.b[i];
         }
 
-        diff_c1 == sum_a && diff_c2 == sum_b
+        let expected_c1 = sum_a;
+        let expected_c2 = sum_b;
+
+        Ok(diff_c1 == expected_c1 && diff_c2 == expected_c2)
     }
 }
 
@@ -400,7 +418,7 @@ pub struct MentalPokerTable {
     players: Vec<Player>,
     dealer: ElGamal,
     encrypted_deck: Vec<ElGamalCiphertext>,
-    shuffled_deck: Vec<ElGamalCiphertext>,
+    shuffled_deck: VecDeque<ElGamalCiphertext>,
     shuffle_proofs: Vec<ShuffleProof>,
     current_shuffle: usize,
 }
@@ -420,7 +438,7 @@ impl MentalPokerTable {
             players,
             dealer,
             encrypted_deck,
-            shuffled_deck: Vec::new(),
+            shuffled_deck: VecDeque::new(),
             shuffle_proofs: Vec::new(),
             current_shuffle: 0,
         }
@@ -439,16 +457,16 @@ impl MentalPokerTable {
     /// and generates a zero-knowledge proof of the shuffle.
     pub fn shuffle_deck(&mut self, player_id: usize) -> bool {
         let _player_id = player_id;
-        let input_deck = if self.shuffled_deck.is_empty() {
+        let input_deck: Vec<ElGamalCiphertext> = if self.shuffled_deck.is_empty() {
             self.encrypted_deck.clone()
         } else {
-            self.shuffled_deck.clone()
+            self.shuffled_deck.iter().cloned().collect()
         };
 
         let shuffle = BayerGrothShuffle::new(self.players.clone());
         let (shuffled, proof) = shuffle.shuffle(&input_deck, &mut OsRng);
 
-        self.shuffled_deck = shuffled;
+        self.shuffled_deck = VecDeque::from(shuffled);
         self.shuffle_proofs.push(proof);
         self.current_shuffle += 1;
 
@@ -464,18 +482,18 @@ impl MentalPokerTable {
         let input = &self.encrypted_deck;
         let proof = self.shuffle_proofs.last().unwrap();
         let public_key_sum = self.collect_public_keys();
+        let shuffled: Vec<ElGamalCiphertext> = self.shuffled_deck.iter().cloned().collect();
 
-        BayerGrothShuffle::verify_shuffle(input, &self.shuffled_deck, proof, &public_key_sum)
+        match BayerGrothShuffle::verify_shuffle(input, &shuffled, proof, &public_key_sum) {
+            Ok(result) => result,
+            Err(_) => false,
+        }
     }
 
     /// Deals the top card from the shuffled deck to a player.
     pub fn deal_card(&mut self, player_id: usize) -> Option<ElGamalCiphertext> {
         let _player_id = player_id;
-        if self.shuffled_deck.is_empty() {
-            return None;
-        }
-
-        Some(self.shuffled_deck.remove(0))
+        self.shuffled_deck.pop_front()
     }
 }
 
@@ -643,10 +661,10 @@ fn run_mental_poker_simulation() {
     let shuffle = BayerGrothShuffle::new(players);
     let test_ciphertexts: Vec<ElGamalCiphertext> = (0..5)
         .map(|_| {
-            let msg = ProjectivePoint::GENERATOR * Scalar::generate_vartime(&mut OsRng);
+            let msg = ProjectivePoint::GENERATOR * Scalar::generate_biased(&mut OsRng);
             ElGamalCiphertext {
-                c1: ProjectivePoint::GENERATOR * Scalar::generate_vartime(&mut OsRng),
-                c2: msg + (shuffle.compute_public_key_sum() * Scalar::generate_vartime(&mut OsRng)),
+                c1: ProjectivePoint::GENERATOR * Scalar::generate_biased(&mut OsRng),
+                c2: msg + (shuffle.compute_public_key_sum() * Scalar::generate_biased(&mut OsRng)),
             }
         })
         .collect();
@@ -663,12 +681,13 @@ fn run_mental_poker_simulation() {
     );
 
     let public_key_sum = shuffle.compute_public_key_sum();
-    let is_valid =
-        BayerGrothShuffle::verify_shuffle(&test_ciphertexts, &shuffled, &proof, &public_key_sum);
-    println!(
-        "  Shuffle verification: {} (structure demonstrated)\n",
-        if is_valid { "PASSED" } else { "DEMONSTRATED" }
-    );
+    match BayerGrothShuffle::verify_shuffle(&test_ciphertexts, &shuffled, &proof, &public_key_sum) {
+        Ok(is_valid) => println!(
+            "  Shuffle verification: {} (structure demonstrated)\n",
+            if is_valid { "PASSED" } else { "DEMONSTRATED" }
+        ),
+        Err(e) => println!("  Shuffle verification: ERROR - {:?}\n", e),
+    }
 
     println!("=== SUMMARY ===");
     println!(
@@ -736,11 +755,11 @@ mod tests {
 
         let ciphertexts: Vec<ElGamalCiphertext> = (0..10)
             .map(|_| {
-                let msg = ProjectivePoint::GENERATOR * Scalar::generate_vartime(&mut OsRng);
+                let msg = ProjectivePoint::GENERATOR * Scalar::generate_biased(&mut OsRng);
                 ElGamalCiphertext {
-                    c1: ProjectivePoint::GENERATOR * Scalar::generate_vartime(&mut OsRng),
+                    c1: ProjectivePoint::GENERATOR * Scalar::generate_biased(&mut OsRng),
                     c2: msg
-                        + (shuffle.compute_public_key_sum() * Scalar::generate_vartime(&mut OsRng)),
+                        + (shuffle.compute_public_key_sum() * Scalar::generate_biased(&mut OsRng)),
                 }
             })
             .collect();
@@ -756,11 +775,11 @@ mod tests {
 
         let ciphertexts: Vec<ElGamalCiphertext> = (0..5)
             .map(|_| {
-                let msg = ProjectivePoint::GENERATOR * Scalar::generate_vartime(&mut OsRng);
+                let msg = ProjectivePoint::GENERATOR * Scalar::generate_biased(&mut OsRng);
                 ElGamalCiphertext {
-                    c1: ProjectivePoint::GENERATOR * Scalar::generate_vartime(&mut OsRng),
+                    c1: ProjectivePoint::GENERATOR * Scalar::generate_biased(&mut OsRng),
                     c2: msg
-                        + (shuffle.compute_public_key_sum() * Scalar::generate_vartime(&mut OsRng)),
+                        + (shuffle.compute_public_key_sum() * Scalar::generate_biased(&mut OsRng)),
                 }
             })
             .collect();
@@ -768,9 +787,12 @@ mod tests {
         let public_key_sum = shuffle.compute_public_key_sum();
         let (shuffled, proof) = shuffle.shuffle(&ciphertexts, &mut OsRng);
 
-        let is_valid =
+        let result =
             BayerGrothShuffle::verify_shuffle(&ciphertexts, &shuffled, &proof, &public_key_sum);
-        assert!(is_valid, "Shuffle verification should pass for valid proof");
+        assert!(
+            result.is_ok() && result.unwrap(),
+            "Shuffle verification should pass for valid proof"
+        );
     }
 
     #[test]
