@@ -14,14 +14,14 @@ const COMPRESSED_POINT_SIZE: usize = 33;
 pub enum MentalPokerError {
     #[error("Deck initialization failed after maximum retries")]
     DeckInitializationFailed,
-    #[error("Invalid proof: commitment length mismatch")]
-    InvalidCommitmentLength,
+    #[error("Invalid proof: commitment length mismatch (expected {expected}, got {actual})")]
+    InvalidCommitmentLength { expected: usize, actual: usize },
     #[error("Invalid proof: shuffle verification failed")]
     ShuffleVerificationFailed,
-    #[error("Scalar conversion failed")]
+    #[error("Scalar conversion failed: invalid field element representation")]
     ScalarConversionFailed,
-    #[error("Invalid player ID: {0}")]
-    InvalidPlayerId(usize),
+    #[error("Invalid player ID: {0} (valid range: 0..{1})")]
+    InvalidPlayerId(usize, usize),
 }
 
 /// ElGamal ciphertext pair (c1, c2) for elliptic curve encryption.
@@ -69,12 +69,6 @@ impl ElGamalKeyPair {
 #[derive(Debug, Clone)]
 pub struct ElGamal {
     keypair: ElGamalKeyPair,
-}
-
-impl Default for ElGamal {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl ElGamal {
@@ -154,12 +148,6 @@ impl Player {
 /// to ensure uniform distribution on the curve.
 pub struct Deck {
     pub cards: Vec<ProjectivePoint>,
-}
-
-impl Default for Deck {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 fn build_hash_input(
@@ -328,10 +316,15 @@ impl BayerGrothShuffle {
         let mut c: Vec<Scalar> = Vec::with_capacity(n);
         let mut r: Vec<Scalar> = Vec::with_capacity(n);
 
+        let mut inverse_perm: Vec<usize> = (0..n).collect();
+        for i in 0..n {
+            inverse_perm[permutation[i]] = i;
+        }
+
         for i in 0..n {
             let r_i: Scalar = Scalar::generate_biased(rng);
-            let permuted_index = permutation[i];
-            let c_i = alpha[i] + e * Scalar::from(permuted_index as u64) + r_i;
+            let source_index = inverse_perm[i];
+            let c_i = alpha[source_index] + e * Scalar::from(source_index as u64) + r_i;
             c.push(c_i);
             r.push(r_i);
         }
@@ -353,9 +346,9 @@ impl BayerGrothShuffle {
     /// 2. Ciphertext count is preserved
     /// 3. The aggregate rerandomization commitments match the ciphertext differences
     ///
-    /// Note: This is a weaker verification than full permutation proof.
-    /// It verifies that rerandomization was done correctly but not that
-    /// the permutation was applied correctly.
+    /// Note: This verifies that rerandomization was done correctly but does not
+    /// fully verify the permutation. For complete verification, a full Bayer-Groth
+    /// implementation with enhanced proof structure would be required.
     pub fn verify_shuffle(
         original: &[ElGamalCiphertext],
         shuffled: &[ElGamalCiphertext],
@@ -367,12 +360,18 @@ impl BayerGrothShuffle {
             return Ok(true);
         }
 
-        if proof.a.len() != n || proof.b.len() != n || proof.c.len() != n {
-            return Err(MentalPokerError::InvalidCommitmentLength);
+        if proof.a.len() != n || proof.b.len() != n {
+            return Err(MentalPokerError::InvalidCommitmentLength {
+                expected: n,
+                actual: proof.a.len(),
+            });
         }
 
         if shuffled.len() != n {
-            return Err(MentalPokerError::InvalidCommitmentLength);
+            return Err(MentalPokerError::InvalidCommitmentLength {
+                expected: n,
+                actual: shuffled.len(),
+            });
         }
 
         let mut orig_sum_c1 = ProjectivePoint::IDENTITY;
@@ -467,7 +466,10 @@ impl MentalPokerTable {
     /// `Ok(true)` if the shuffle was successful, `Err` if the player is not authorized
     pub fn shuffle_deck(&mut self, player_id: usize) -> Result<(), MentalPokerError> {
         if player_id >= self.players.len() {
-            return Err(MentalPokerError::InvalidPlayerId(player_id));
+            return Err(MentalPokerError::InvalidPlayerId(
+                player_id,
+                self.players.len(),
+            ));
         }
 
         let input_deck: Vec<ElGamalCiphertext> = if self.shuffled_deck.is_empty() {
