@@ -20,6 +20,8 @@ pub enum MentalPokerError {
     ShuffleVerificationFailed,
     #[error("Scalar conversion failed")]
     ScalarConversionFailed,
+    #[error("Invalid player ID: {0}")]
+    InvalidPlayerId(usize),
 }
 
 /// ElGamal ciphertext pair (c1, c2) for elliptic curve encryption.
@@ -463,9 +465,9 @@ impl MentalPokerTable {
     /// # Returns
     ///
     /// `Ok(true)` if the shuffle was successful, `Err` if the player is not authorized
-    pub fn shuffle_deck(&mut self, player_id: usize) -> Result<bool, MentalPokerError> {
+    pub fn shuffle_deck(&mut self, player_id: usize) -> Result<(), MentalPokerError> {
         if player_id >= self.players.len() {
-            return Ok(false);
+            return Err(MentalPokerError::InvalidPlayerId(player_id));
         }
 
         let input_deck: Vec<ElGamalCiphertext> = if self.shuffled_deck.is_empty() {
@@ -482,7 +484,7 @@ impl MentalPokerTable {
         self.shuffle_proofs.push(proof);
         self.current_shuffle += 1;
 
-        Ok(true)
+        Ok(())
     }
 
     /// Verifies the most recent shuffle proof.
@@ -525,7 +527,7 @@ impl MentalPokerTable {
     }
 }
 
-fn run_mental_poker_simulation() {
+fn run_mental_poker_simulation() -> Result<(), MentalPokerError> {
     println!("========================================");
     println!("  MENTAL POKER with BAYER-GROTH SHUFFLE");
     println!("========================================\n");
@@ -567,7 +569,7 @@ fn run_mental_poker_simulation() {
         println!("    Shuffler: Player {}", player_id);
 
         let before_count = table.shuffled_deck.len();
-        let _ = table.shuffle_deck(player_id);
+        table.shuffle_deck(player_id)?;
         let after_count = table.shuffled_deck.len();
 
         println!("    Deck size: {} -> {}", before_count, after_count);
@@ -713,10 +715,15 @@ fn run_mental_poker_simulation() {
     println!("  - Cards can only be decrypted cooperatively");
     println!("\nNote: Full production deployment requires additional");
     println!("cryptographic review and security hardening.");
+
+    Ok(())
 }
 
 fn main() {
-    run_mental_poker_simulation();
+    if let Err(e) = run_mental_poker_simulation() {
+        eprintln!("Error running simulation: {}", e);
+        std::process::exit(1);
+    }
 }
 
 #[cfg(test)]
