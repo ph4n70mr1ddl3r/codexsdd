@@ -377,8 +377,7 @@ impl BayerGrothShuffle {
 
         let mut hasher = Sha256::new();
         hasher.update(&hash_input);
-        let _e = Scalar::from_repr_vartime(hasher.finalize())
-            .ok_or(MentalPokerError::ScalarConversionFailed)?;
+        let _challenge_hash = hasher.finalize();
 
         let mut orig_sum_c1 = ProjectivePoint::IDENTITY;
         let mut orig_sum_c2 = ProjectivePoint::IDENTITY;
