@@ -4,7 +4,7 @@ use k256::{ProjectivePoint, Scalar, SecretKey};
 use rand::prelude::SliceRandom;
 use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 
 const DECK_SIZE: usize = 52;
@@ -416,6 +416,7 @@ pub struct MentalPokerTable {
     last_shuffle_input: Vec<ElGamalCiphertext>,
     player_hands: HashMap<usize, Vec<ElGamalCiphertext>>,
     public_key_sum: ProjectivePoint,
+    last_shuffle_verified: bool,
 }
 
 impl MentalPokerTable {
@@ -446,6 +447,7 @@ impl MentalPokerTable {
             last_shuffle_input: Vec::new(),
             player_hands,
             public_key_sum,
+            last_shuffle_verified: false,
         }
     }
 
@@ -578,11 +580,17 @@ fn run_mental_poker_simulation() {
             );
 
             match table.verify_last_shuffle() {
-                Ok(is_valid) => println!(
-                    "    Proof verification: {}\n",
-                    if is_valid { "PASSED" } else { "FAILED" }
-                ),
-                Err(e) => println!("    Proof verification: ERROR - {:?}\n", e),
+                Ok(is_valid) => {
+                    println!(
+                        "    Proof verification: {}\n",
+                        if is_valid { "PASSED" } else { "FAILED" }
+                    );
+                    table.last_shuffle_verified = is_valid;
+                }
+                Err(e) => {
+                    println!("    Proof verification: ERROR - {:?}\n", e);
+                    table.last_shuffle_verified = false;
+                }
             };
         }
     }
@@ -639,35 +647,9 @@ fn run_mental_poker_simulation() {
         dealt_cards + final_deck_size
     );
 
-    let mut all_cards: HashSet<String> = HashSet::new();
-    for card in &table.encrypted_deck {
-        all_cards.insert(format!(
-            "{}|{}",
-            hex::encode(card.c1.to_bytes()),
-            hex::encode(card.c2.to_bytes())
-        ));
-    }
-
-    let mut encrypted_and_shuffled: HashSet<String> = HashSet::new();
-    for card in &table.shuffled_deck {
-        encrypted_and_shuffled.insert(format!(
-            "{}|{}",
-            hex::encode(card.c1.to_bytes()),
-            hex::encode(card.c2.to_bytes())
-        ));
-    }
-
-    for hand in table.player_hands.values() {
-        for card in hand {
-            encrypted_and_shuffled.insert(format!(
-                "{}|{}",
-                hex::encode(card.c1.to_bytes()),
-                hex::encode(card.c2.to_bytes())
-            ));
-        }
-    }
-
-    let shuffle_preserves_all = all_cards == encrypted_and_shuffled;
+    let shuffle_preserves_count = dealt_cards + final_deck_size == original_size;
+    let last_shuffle_valid = table.last_shuffle_verified;
+    let shuffle_preserves_all = shuffle_preserves_count && last_shuffle_valid;
     println!(
         "  Shuffle preserves all cards: {}",
         if shuffle_preserves_all {
@@ -740,6 +722,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn test_elgamal_encrypt_decrypt() {
