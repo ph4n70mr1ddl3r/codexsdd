@@ -377,7 +377,7 @@ impl BayerGrothShuffle {
 
         let mut hasher = Sha256::new();
         hasher.update(&hash_input);
-        let _challenge_hash = hasher.finalize();
+        hasher.finalize();
 
         let mut orig_sum_c1 = ProjectivePoint::IDENTITY;
         let mut orig_sum_c2 = ProjectivePoint::IDENTITY;
@@ -421,6 +421,7 @@ pub struct MentalPokerTable {
     current_shuffle: usize,
     last_shuffle_input: Vec<ElGamalCiphertext>,
     player_hands: HashMap<usize, Vec<ElGamalCiphertext>>,
+    public_key_sum: ProjectivePoint,
 }
 
 impl MentalPokerTable {
@@ -428,7 +429,7 @@ impl MentalPokerTable {
     ///
     /// Initializes players, creates a new deck, and encrypts all cards.
     pub fn new(num_players: usize) -> Self {
-        let players = (0..num_players).map(Player::new).collect();
+        let players: Vec<Player> = (0..num_players).map(Player::new).collect();
 
         let deck = Deck::new();
         let dealer = ElGamal::new();
@@ -436,6 +437,10 @@ impl MentalPokerTable {
 
         let player_hands: HashMap<usize, Vec<ElGamalCiphertext>> =
             (0..num_players).map(|id| (id, Vec::new())).collect();
+
+        let public_key_sum = players
+            .iter()
+            .fold(ProjectivePoint::IDENTITY, |acc, p| acc + p.public_key());
 
         Self {
             players,
@@ -446,6 +451,7 @@ impl MentalPokerTable {
             current_shuffle: 0,
             last_shuffle_input: Vec::new(),
             player_hands,
+            public_key_sum,
         }
     }
 
@@ -472,11 +478,7 @@ impl MentalPokerTable {
             self.shuffled_deck.iter().cloned().collect()
         };
 
-        let public_key_sum = self
-            .players
-            .iter()
-            .fold(ProjectivePoint::IDENTITY, |acc, p| acc + p.public_key());
-        let shuffle = BayerGrothShuffle::with_public_key_sum(public_key_sum);
+        let shuffle = BayerGrothShuffle::with_public_key_sum(self.public_key_sum);
         let (shuffled, proof) = shuffle.shuffle(&input_deck, &mut OsRng)?;
 
         self.last_shuffle_input = input_deck;
