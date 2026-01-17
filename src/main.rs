@@ -244,22 +244,28 @@ impl Deck {
 /// was applied to a sequence of ElGamal ciphertexts. This allows multiple
 /// players to shuffle a deck without any single player learning the order.
 pub struct BayerGrothShuffle {
-    players: Vec<Player>,
+    public_key_sum: ProjectivePoint,
 }
 
 impl BayerGrothShuffle {
     /// Creates a new shuffle instance with the given players.
-    pub fn new(players: Vec<Player>) -> Self {
-        Self { players }
+    pub fn new(players: &[Player]) -> Self {
+        let public_key_sum = players
+            .iter()
+            .fold(ProjectivePoint::IDENTITY, |acc, p| acc + p.public_key());
+        Self { public_key_sum }
+    }
+
+    /// Creates a new shuffle instance with a precomputed public key sum.
+    pub fn with_public_key_sum(public_key_sum: ProjectivePoint) -> Self {
+        Self { public_key_sum }
     }
 
     /// Computes the sum of all players' public keys.
     ///
     /// This combined public key is used for rerandomization during shuffling.
     pub fn compute_public_key_sum(&self) -> ProjectivePoint {
-        self.players
-            .iter()
-            .fold(ProjectivePoint::IDENTITY, |acc, p| acc + p.public_key())
+        self.public_key_sum
     }
 
     /// Shuffles a sequence of ciphertexts and produces a zero-knowledge proof.
@@ -415,6 +421,7 @@ pub struct MentalPokerTable {
     shuffle_proofs: Vec<ShuffleProof>,
     current_shuffle: usize,
     last_shuffle_input: Vec<ElGamalCiphertext>,
+    player_hands: HashMap<usize, Vec<ElGamalCiphertext>>,
 }
 
 impl MentalPokerTable {
@@ -428,6 +435,9 @@ impl MentalPokerTable {
         let dealer = ElGamal::new();
         let encrypted_deck = deck.encrypt_deck(&dealer);
 
+        let player_hands: HashMap<usize, Vec<ElGamalCiphertext>> =
+            (0..num_players).map(|id| (id, Vec::new())).collect();
+
         Self {
             players,
             dealer,
@@ -436,6 +446,7 @@ impl MentalPokerTable {
             shuffle_proofs: Vec::new(),
             current_shuffle: 0,
             last_shuffle_input: Vec::new(),
+            player_hands,
         }
     }
 
@@ -462,7 +473,11 @@ impl MentalPokerTable {
             self.shuffled_deck.iter().cloned().collect()
         };
 
-        let shuffle = BayerGrothShuffle::new(self.players.clone());
+        let public_key_sum = self
+            .players
+            .iter()
+            .fold(ProjectivePoint::IDENTITY, |acc, p| acc + p.public_key());
+        let shuffle = BayerGrothShuffle::with_public_key_sum(public_key_sum);
         let (shuffled, proof) = shuffle.shuffle(&input_deck, &mut OsRng)?;
 
         self.last_shuffle_input = input_deck;
@@ -498,7 +513,19 @@ impl MentalPokerTable {
         if player_id >= self.players.len() {
             return None;
         }
-        self.shuffled_deck.pop_front()
+        let card = self.shuffled_deck.pop_front();
+        if let Some(ref c) = card {
+            self.player_hands
+                .get_mut(&player_id)
+                .unwrap()
+                .push(c.clone());
+        }
+        card
+    }
+
+    /// Returns the cards dealt to a specific player.
+    pub fn get_player_hand(&self, player_id: usize) -> Option<&Vec<ElGamalCiphertext>> {
+        self.player_hands.get(&player_id)
     }
 }
 
@@ -568,18 +595,12 @@ fn run_mental_poker_simulation() {
 
     println!("=== 3. DEALING PHASE ===\n");
 
-    let mut player_hands: HashMap<usize, Vec<ElGamalCiphertext>> = HashMap::new();
-    for player in &table.players {
-        player_hands.insert(player.id, Vec::new());
-    }
-
     let player_ids: Vec<usize> = table.players.iter().map(|p| p.id).collect();
 
     for round in 1..=5 {
         println!("  Dealing Round {}:", round);
         for &player_id in &player_ids {
             if let Some(card) = table.deal_card(player_id) {
-                player_hands.get_mut(&player_id).unwrap().push(card.clone());
                 let c1_len = card.c1.to_bytes().len();
                 let c2_len = card.c2.to_bytes().len();
                 let c1_start = hex::encode(&card.c1.to_bytes()[..8.min(c1_len)]);
@@ -594,15 +615,17 @@ fn run_mental_poker_simulation() {
 
     println!("\n=== 4. DECRYPTION PHASE (Distributed) ===\n");
 
-    for (player_id, hand) in &player_hands {
-        println!("  Player {}'s hand ({} cards):", player_id, hand.len());
-        for (i, card) in hand.iter().enumerate() {
-            let decrypted = table.dealer.decrypt(card);
-            let card_bytes = decrypted.to_bytes();
-            let len = card_bytes.len();
-            let start = hex::encode(&card_bytes[..8.min(len)]);
-            let end = hex::encode(&card_bytes[len.saturating_sub(8)..]);
-            println!("    Card {}: {}...{}", i + 1, start, end);
+    for player_id in &player_ids {
+        if let Some(hand) = table.get_player_hand(*player_id) {
+            println!("  Player {}'s hand ({} cards):", player_id, hand.len());
+            for (i, card) in hand.iter().enumerate() {
+                let decrypted = table.dealer.decrypt(card);
+                let card_bytes = decrypted.to_bytes();
+                let len = card_bytes.len();
+                let start = hex::encode(&card_bytes[..8.min(len)]);
+                let end = hex::encode(&card_bytes[len.saturating_sub(8)..]);
+                println!("    Card {}: {}...{}", i + 1, start, end);
+            }
         }
     }
 
@@ -610,7 +633,7 @@ fn run_mental_poker_simulation() {
 
     let final_deck_size = table.shuffled_deck.len();
     let original_size = table.encrypted_deck.len();
-    let dealt_cards: usize = player_hands.values().map(|h| h.len()).sum();
+    let dealt_cards: usize = table.player_hands.values().map(|h| h.len()).sum();
 
     println!("  Original deck size: {}", original_size);
     println!("  Cards dealt: {}", dealt_cards);
@@ -640,7 +663,7 @@ fn run_mental_poker_simulation() {
         ));
     }
 
-    for hand in player_hands.values() {
+    for hand in table.player_hands.values() {
         for card in hand {
             encrypted_and_shuffled.insert(format!(
                 "{}|{}",
@@ -665,7 +688,7 @@ fn run_mental_poker_simulation() {
     println!("========================================\n");
 
     let test_players: Vec<Player> = (0..2).map(Player::new).collect();
-    let shuffle = BayerGrothShuffle::new(test_players);
+    let shuffle = BayerGrothShuffle::new(&test_players);
     let test_ciphertexts: Vec<ElGamalCiphertext> = (0..5)
         .map(|_| {
             let msg = ProjectivePoint::GENERATOR * Scalar::generate_biased(&mut OsRng);
@@ -757,7 +780,7 @@ mod tests {
     #[test]
     fn test_shuffle_preserves_count() {
         let players: Vec<Player> = (0..2).map(Player::new).collect();
-        let shuffle = BayerGrothShuffle::new(players.clone());
+        let shuffle = BayerGrothShuffle::new(&players);
 
         let ciphertexts: Vec<ElGamalCiphertext> = (0..10)
             .map(|_| {
@@ -777,7 +800,7 @@ mod tests {
     #[test]
     fn test_shuffle_verification_success() {
         let players: Vec<Player> = (0..2).map(Player::new).collect();
-        let shuffle = BayerGrothShuffle::new(players.clone());
+        let shuffle = BayerGrothShuffle::new(&players);
 
         let ciphertexts: Vec<ElGamalCiphertext> = (0..5)
             .map(|_| {
