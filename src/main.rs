@@ -373,12 +373,6 @@ impl BayerGrothShuffle {
             return Err(MentalPokerError::InvalidCommitmentLength);
         }
 
-        let hash_input = build_hash_input(shuffled, &proof.a, &proof.b);
-
-        let mut hasher = Sha256::new();
-        hasher.update(&hash_input);
-        hasher.finalize();
-
         let mut orig_sum_c1 = ProjectivePoint::IDENTITY;
         let mut orig_sum_c2 = ProjectivePoint::IDENTITY;
         let mut shuffled_sum_c1 = ProjectivePoint::IDENTITY;
@@ -515,11 +509,10 @@ impl MentalPokerTable {
             return None;
         }
         let card = self.shuffled_deck.pop_front();
-        if let Some(ref c) = card {
-            self.player_hands
-                .get_mut(&player_id)
-                .unwrap()
-                .push(c.clone());
+        if let Some(ref c) = card
+            && let Some(hand) = self.player_hands.get_mut(&player_id)
+        {
+            hand.push(c.clone());
         }
         card
     }
