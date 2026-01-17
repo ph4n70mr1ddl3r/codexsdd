@@ -166,7 +166,7 @@ fn build_hash_input(
     commitments_b: &[ProjectivePoint],
 ) -> Vec<u8> {
     let n = ciphertexts.len();
-    let total_size = n * COMPRESSED_POINT_SIZE * 2 + n * COMPRESSED_POINT_SIZE * 2;
+    let total_size = 4 * n * COMPRESSED_POINT_SIZE;
     let mut hash_input = Vec::with_capacity(total_size);
 
     for ct in ciphertexts {
@@ -268,7 +268,7 @@ impl BayerGrothShuffle {
     /// 1. Applying a random permutation to the ciphertexts
     /// 2. Rerandomizing each ciphertext with fresh random values
     /// 3. Generating a proof that the permutation and rerandomization were done correctly
-    pub fn shuffle<R: rand::Rng>(
+    pub fn shuffle<R: rand::Rng + rand::CryptoRng>(
         &self,
         ciphertexts: &[ElGamalCiphertext],
         rng: &mut R,
@@ -289,8 +289,8 @@ impl BayerGrothShuffle {
         let public_key_sum = self.compute_public_key_sum();
 
         for permuted_ct in &permuted {
-            let a_i: Scalar = Scalar::generate_biased(&mut OsRng);
-            let b_i: Scalar = Scalar::generate_biased(&mut OsRng);
+            let a_i: Scalar = Scalar::generate_biased(rng);
+            let b_i: Scalar = Scalar::generate_biased(rng);
 
             alpha.push(a_i);
             beta.push(b_i);
@@ -321,7 +321,7 @@ impl BayerGrothShuffle {
         let mut r: Vec<Scalar> = Vec::with_capacity(n);
 
         for i in 0..n {
-            let r_i: Scalar = Scalar::generate_biased(&mut OsRng);
+            let r_i: Scalar = Scalar::generate_biased(rng);
             let permuted_index = permutation[i];
             let c_i = alpha[i] + e * Scalar::from(permuted_index as u64) + r_i;
             c.push(c_i);
@@ -414,6 +414,7 @@ pub struct MentalPokerTable {
     shuffled_deck: VecDeque<ElGamalCiphertext>,
     shuffle_proofs: Vec<ShuffleProof>,
     current_shuffle: usize,
+    last_shuffle_input: Vec<ElGamalCiphertext>,
 }
 
 impl MentalPokerTable {
@@ -434,6 +435,7 @@ impl MentalPokerTable {
             shuffled_deck: VecDeque::new(),
             shuffle_proofs: Vec::new(),
             current_shuffle: 0,
+            last_shuffle_input: Vec::new(),
         }
     }
 
@@ -463,6 +465,7 @@ impl MentalPokerTable {
         let shuffle = BayerGrothShuffle::new(self.players.clone());
         let (shuffled, proof) = shuffle.shuffle(&input_deck, &mut OsRng)?;
 
+        self.last_shuffle_input = input_deck;
         self.shuffled_deck = VecDeque::from(shuffled);
         self.shuffle_proofs.push(proof);
         self.current_shuffle += 1;
@@ -471,16 +474,15 @@ impl MentalPokerTable {
     }
 
     /// Verifies the most recent shuffle proof.
-    pub fn verify_last_shuffle(&self) -> bool {
+    pub fn verify_last_shuffle(&self) -> Result<bool, MentalPokerError> {
         if self.shuffle_proofs.is_empty() || self.shuffled_deck.is_empty() {
-            return false;
+            return Ok(false);
         }
 
-        let input = &self.encrypted_deck;
         let proof = self.shuffle_proofs.last().unwrap();
         let shuffled: Vec<ElGamalCiphertext> = self.shuffled_deck.iter().cloned().collect();
 
-        BayerGrothShuffle::verify_shuffle(input, &shuffled, proof).unwrap_or_default()
+        BayerGrothShuffle::verify_shuffle(&self.last_shuffle_input, &shuffled, proof)
     }
 
     /// Deals the top card from the shuffled deck to a player.
@@ -554,12 +556,13 @@ fn run_mental_poker_simulation() {
                 proof.r.len()
             );
 
-            let _is_valid = table.verify_last_shuffle();
-            println!(
-                "    Proof generated: {} commitments, {} responses\n",
-                proof.a.len() + proof.b.len(),
-                proof.r.len()
-            );
+            match table.verify_last_shuffle() {
+                Ok(is_valid) => println!(
+                    "    Proof verification: {}\n",
+                    if is_valid { "PASSED" } else { "FAILED" }
+                ),
+                Err(e) => println!("    Proof verification: ERROR - {:?}\n", e),
+            };
         }
     }
 
@@ -807,7 +810,9 @@ mod tests {
         assert_eq!(table.shuffled_deck.len(), DECK_SIZE);
         assert_eq!(table.shuffle_proofs.len(), 1);
 
-        let verified = table.verify_last_shuffle();
+        let verified = table
+            .verify_last_shuffle()
+            .expect("verify should not error");
         assert!(verified, "Shuffle should be verifiable");
 
         let player_ids: Vec<usize> = table.players.iter().map(|p| p.id).collect();
