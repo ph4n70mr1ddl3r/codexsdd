@@ -71,6 +71,12 @@ pub struct ElGamal {
     keypair: ElGamalKeyPair,
 }
 
+impl Default for ElGamal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ElGamal {
     /// Creates a new ElGamal encryption instance with a fresh key pair.
     pub fn new() -> Self {
@@ -171,6 +177,12 @@ fn build_hash_input(
     }
 
     hash_input
+}
+
+impl Default for Deck {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Deck {
@@ -321,9 +333,8 @@ impl BayerGrothShuffle {
             inverse_perm[permutation[i]] = i;
         }
 
-        for i in 0..n {
+        for &source_index in inverse_perm.iter() {
             let r_i: Scalar = Scalar::generate_biased(rng);
-            let source_index = inverse_perm[i];
             let c_i = alpha[source_index] + e * Scalar::from(source_index as u64) + r_i;
             c.push(c_i);
             r.push(r_i);
