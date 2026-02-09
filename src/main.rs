@@ -1,6 +1,6 @@
+use k256::elliptic_curve::group::GroupEncoding;
 use k256::elliptic_curve::Field;
 use k256::elliptic_curve::PrimeField;
-use k256::elliptic_curve::group::GroupEncoding;
 use k256::{ProjectivePoint, Scalar, SecretKey};
 use rand::prelude::SliceRandom;
 use rand::rngs::OsRng;
@@ -29,6 +29,8 @@ pub enum MentalPokerError {
     DeckNotShuffled,
     #[error("Cannot deal card: deck is empty")]
     DeckEmpty,
+    #[error("Invalid player initialization: duplicate player IDs detected")]
+    DuplicatePlayerIdInitialization,
 }
 
 /// ElGamal ciphertext pair (c1, c2) for elliptic curve encryption.
@@ -237,12 +239,13 @@ impl Deck {
             }
             hash.copy_from_slice(&hasher.finalize());
 
-            if let Some(scalar) = Scalar::from_repr(hash.into()).into_option()
-                && scalar != Scalar::ZERO
-            {
-                let point = ProjectivePoint::GENERATOR * scalar;
-                if point != ProjectivePoint::IDENTITY {
-                    return Ok(scalar);
+            let scalar_option = Scalar::from_repr(hash.into()).into_option();
+            if let Some(scalar) = scalar_option {
+                if scalar != Scalar::ZERO {
+                    let point = ProjectivePoint::GENERATOR * scalar;
+                    if point != ProjectivePoint::IDENTITY {
+                        return Ok(scalar);
+                    }
                 }
             }
         }
@@ -452,13 +455,13 @@ impl MentalPokerTable {
     /// Creates a new mental poker table with the specified number of players.
     ///
     /// Initializes players, creates a new deck, and encrypts all cards.
-    pub fn new(num_players: usize) -> Self {
+    pub fn new(num_players: usize) -> Result<Self, MentalPokerError> {
         let players: Vec<Player> = (0..num_players).map(Player::new).collect();
 
         let mut seen_ids = std::collections::HashSet::new();
         for player in &players {
             if !seen_ids.insert(player.id) {
-                panic!("Duplicate player ID detected: {}", player.id);
+                return Err(MentalPokerError::DuplicatePlayerIdInitialization);
             }
         }
 
@@ -473,7 +476,7 @@ impl MentalPokerTable {
             .iter()
             .fold(ProjectivePoint::IDENTITY, |acc, p| acc + p.public_key());
 
-        Self {
+        Ok(Self {
             players,
             dealer,
             encrypted_deck,
@@ -483,7 +486,7 @@ impl MentalPokerTable {
             last_shuffle_input: Vec::new(),
             player_hands,
             public_key_sum,
-        }
+        })
     }
 
     /// Shuffles the deck using the Bayer-Groth shuffle protocol.
@@ -582,7 +585,7 @@ fn run_mental_poker_simulation() -> Result<(), MentalPokerError> {
     println!("========================================\n");
 
     let num_players = 2;
-    let mut table = MentalPokerTable::new(num_players);
+    let mut table = MentalPokerTable::new(num_players)?;
 
     println!("=== 1. SETUP PHASE ===\n");
     println!("Players: {}", num_players);
@@ -857,7 +860,7 @@ mod tests {
 
     #[test]
     fn test_mental_poker_table_lifecycle() {
-        let mut table = MentalPokerTable::new(3);
+        let mut table = MentalPokerTable::new(3).expect("Failed to create table");
 
         assert_eq!(table.shuffled_deck.len(), 0);
         assert_eq!(table.shuffle_proofs.len(), 0);
