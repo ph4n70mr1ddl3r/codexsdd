@@ -207,6 +207,7 @@ dependencies = [
  "k256",
  "rand",
  "sha2",
+ "subtle",
  "thiserror",
 ]
 

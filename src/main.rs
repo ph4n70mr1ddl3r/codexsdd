@@ -7,6 +7,7 @@ use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
+use subtle::ConstantTimeEq;
 
 const DECK_SIZE: usize = 52;
 const COMPRESSED_POINT_SIZE: usize = 33;
@@ -201,7 +202,7 @@ fn build_hash_input(
 
 impl Default for Deck {
     fn default() -> Self {
-        Self::new()
+        Self::new().expect("Failed to create deck")
     }
 }
 
@@ -210,18 +211,17 @@ impl Deck {
     ///
     /// Uses SHA-256 to derive scalars from card identifiers, then multiplies
     /// by the generator to obtain points on secp256k1.
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, MentalPokerError> {
         let mut cards = Vec::with_capacity(DECK_SIZE);
 
         for i in 0..DECK_SIZE {
             let card_data = format!("CARD_{}", i);
-            let scalar = Self::hash_to_valid_scalar(card_data.as_bytes())
-                .expect("Failed to generate valid card point");
+            let scalar = Self::hash_to_valid_scalar(card_data.as_bytes())?;
 
             cards.push(ProjectivePoint::GENERATOR * scalar);
         }
 
-        Self { cards }
+        Ok(Self { cards })
     }
 
     fn hash_to_valid_scalar(input: &[u8]) -> Result<Scalar, MentalPokerError> {
@@ -431,7 +431,15 @@ impl BayerGrothShuffle {
             sum_b += proof.b[i];
         }
 
-        Ok(diff_c1 == sum_a && diff_c2 == sum_b)
+        let diff_c1_bytes = diff_c1.to_bytes();
+        let sum_a_bytes = sum_a.to_bytes();
+        let diff_c2_bytes = diff_c2.to_bytes();
+        let sum_b_bytes = sum_b.to_bytes();
+
+        let c1_eq = diff_c1_bytes.ct_eq(&sum_a_bytes);
+        let c2_eq = diff_c2_bytes.ct_eq(&sum_b_bytes);
+
+        Ok(c1_eq.into() && c2_eq.into())
     }
 }
 
@@ -444,6 +452,7 @@ pub struct MentalPokerTable {
     dealer: ElGamal,
     encrypted_deck: Vec<ElGamalCiphertext>,
     shuffled_deck: VecDeque<ElGamalCiphertext>,
+    full_shuffled_deck: Vec<ElGamalCiphertext>,
     shuffle_proofs: Vec<ShuffleProof>,
     current_shuffle: usize,
     last_shuffle_input: Vec<ElGamalCiphertext>,
@@ -465,7 +474,7 @@ impl MentalPokerTable {
             }
         }
 
-        let deck = Deck::new();
+        let deck = Deck::new()?;
         let dealer = ElGamal::new();
         let encrypted_deck = deck.encrypt_deck(&dealer);
 
@@ -481,6 +490,7 @@ impl MentalPokerTable {
             dealer,
             encrypted_deck,
             shuffled_deck: VecDeque::new(),
+            full_shuffled_deck: Vec::new(),
             shuffle_proofs: Vec::new(),
             current_shuffle: 0,
             last_shuffle_input: Vec::new(),
@@ -519,6 +529,7 @@ impl MentalPokerTable {
         let (shuffled, proof) = shuffle.shuffle(&input_deck, &mut OsRng)?;
 
         self.last_shuffle_input = input_deck;
+        self.full_shuffled_deck = shuffled.clone();
         self.shuffled_deck = VecDeque::from(shuffled);
         self.shuffle_proofs.push(proof);
         self.current_shuffle += 1;
@@ -531,7 +542,7 @@ impl MentalPokerTable {
         if self.shuffle_proofs.is_empty() {
             return Ok(true);
         }
-        if self.shuffled_deck.is_empty() {
+        if self.full_shuffled_deck.is_empty() {
             return Ok(false);
         }
 
@@ -539,9 +550,8 @@ impl MentalPokerTable {
             .shuffle_proofs
             .last()
             .ok_or(MentalPokerError::ShuffleVerificationFailed)?;
-        let shuffled: Vec<ElGamalCiphertext> = self.shuffled_deck.iter().cloned().collect();
 
-        BayerGrothShuffle::verify_shuffle(&self.last_shuffle_input, &shuffled, proof)
+        BayerGrothShuffle::verify_shuffle(&self.last_shuffle_input, &self.full_shuffled_deck, proof)
     }
 
     /// Deals the top card from the shuffled deck to a player.
@@ -597,7 +607,7 @@ fn run_mental_poker_simulation() -> Result<(), MentalPokerError> {
         println!("  Player {} public key: {}...{}", player.id, start, end);
     }
 
-    let deck = Deck::new();
+    let deck = Deck::new()?;
     println!(
         "\n  Deck created with {} cards (each mapped to curve point)",
         deck.cards.len()
@@ -793,7 +803,7 @@ mod tests {
 
     #[test]
     fn test_deck_creation() {
-        let deck = Deck::new();
+        let deck = Deck::new().expect("Failed to create deck");
         assert_eq!(deck.cards.len(), DECK_SIZE);
 
         let mut unique_points: HashSet<String> = HashSet::new();
@@ -908,5 +918,77 @@ mod tests {
         assert!(display.contains("("));
         assert!(display.contains(")"));
         assert!(display.contains(","));
+    }
+
+    #[test]
+    fn test_single_player_table() {
+        let mut table = MentalPokerTable::new(1).expect("Failed to create table");
+        assert_eq!(table.players.len(), 1);
+
+        assert!(table.shuffle_deck(0).is_ok());
+        let verified = table
+            .verify_last_shuffle()
+            .expect("Verify should not error");
+        assert!(verified, "Shuffle should be verifiable with single player");
+    }
+
+    #[test]
+    fn test_invalid_player_id_shuffle() {
+        let mut table = MentalPokerTable::new(2).expect("Failed to create table");
+
+        let result = table.shuffle_deck(5);
+        assert!(result.is_err());
+        assert!(matches!(
+            result,
+            Err(MentalPokerError::InvalidPlayerId(5, 2))
+        ));
+    }
+
+    #[test]
+    fn test_invalid_player_id_deal() {
+        let mut table = MentalPokerTable::new(2).expect("Failed to create table");
+        table.shuffle_deck(0).expect("Shuffle should succeed");
+
+        let result = table.deal_card(5);
+        assert!(result.is_err());
+        assert!(matches!(
+            result,
+            Err(MentalPokerError::InvalidPlayerId(5, 2))
+        ));
+    }
+
+    #[test]
+    fn test_deal_from_empty_deck() {
+        let mut table = MentalPokerTable::new(2).expect("Failed to create table");
+        table.shuffle_deck(0).expect("Shuffle should succeed");
+
+        for _ in 0..DECK_SIZE {
+            table.deal_card(0).expect("Deal should succeed");
+        }
+
+        let result = table.deal_card(0);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(MentalPokerError::DeckEmpty)));
+    }
+
+    #[test]
+    fn test_multiple_shuffles_verification() {
+        let mut table = MentalPokerTable::new(2).expect("Failed to create table");
+
+        for i in 0..3 {
+            table.shuffle_deck(i % 2).expect("Shuffle should succeed");
+            let verified = table
+                .verify_last_shuffle()
+                .expect("Verify should not error");
+            assert!(verified, "Shuffle {} should be verifiable", i);
+        }
+    }
+
+    #[test]
+    fn test_empty_shuffle_verification() {
+        let table = MentalPokerTable::new(2).expect("Failed to create table");
+        let result = table.verify_last_shuffle();
+        assert!(result.is_ok());
+        assert!(result.unwrap(), "Empty shuffle list should return true");
     }
 }
