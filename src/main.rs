@@ -38,9 +38,9 @@ pub enum MentalPokerError {
     InvalidCiphertext,
 }
 
-/// ElGamal ciphertext pair (c1, c2) for elliptic curve encryption.
+/// `ElGamal` ciphertext pair (c1, c2) for elliptic curve encryption.
 ///
-/// In ElGamal on elliptic curves:
+/// In `ElGamal` on elliptic curves:
 /// - c1 = r * G (random point)
 /// - c2 = m + r * PK (message point plus random multiple of public key)
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,7 +60,7 @@ impl fmt::Display for ElGamalCiphertext {
     }
 }
 
-/// Key pair for ElGamal encryption consisting of secret key and derived public key.
+/// Key pair for `ElGamal` encryption consisting of secret key and derived public key.
 #[derive(Debug, Clone)]
 pub struct ElGamalKeyPair {
     pub public_key: ProjectivePoint,
@@ -68,7 +68,7 @@ pub struct ElGamalKeyPair {
 }
 
 impl ElGamalKeyPair {
-    /// Generates a new random ElGamal key pair using secure random number generation.
+    /// Generates a new random `ElGamal` key pair using secure random number generation.
     pub fn generate() -> Self {
         let secret_key = SecretKey::random(&mut OsRng);
         let public_key = ProjectivePoint::GENERATOR * secret_key.to_nonzero_scalar().as_ref();
@@ -79,7 +79,7 @@ impl ElGamalKeyPair {
     }
 }
 
-/// ElGamal encryption scheme for elliptic curve points.
+/// `ElGamal` encryption scheme for elliptic curve points.
 #[derive(Debug, Clone)]
 pub struct ElGamal {
     keypair: ElGamalKeyPair,
@@ -92,7 +92,8 @@ impl Default for ElGamal {
 }
 
 impl ElGamal {
-    /// Creates a new ElGamal encryption instance with a fresh key pair.
+    /// Creates a new `ElGamal` encryption instance with a fresh key pair.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             keypair: ElGamalKeyPair::generate(),
@@ -103,7 +104,11 @@ impl ElGamal {
     ///
     /// Returns ciphertext (c1, c2) where:
     /// - c1 = r * G (random scalar times generator)
-    /// - c2 = message + r * public_key
+    /// - c2 = message + r * `public_key`
+    ///
+    /// # Errors
+    ///
+    /// Returns `MentalPokerError::InvalidMessagePoint` if the message is the identity point.
     pub fn encrypt(
         &self,
         message: &ProjectivePoint,
@@ -119,7 +124,11 @@ impl ElGamal {
 
     /// Decrypts a ciphertext using the secret key.
     ///
-    /// Computes: c2 - c1 * secret_key = message
+    /// Computes: c2 - c1 * `secret_key` = message
+    ///
+    /// # Errors
+    ///
+    /// Returns `MentalPokerError::InvalidCiphertext` if the ciphertext contains invalid curve points.
     pub fn decrypt(
         &self,
         ciphertext: &ElGamalCiphertext,
@@ -140,9 +149,9 @@ impl ElGamal {
 /// without revealing the permutation itself.
 #[derive(Debug, Clone)]
 pub struct ShuffleProof {
-    /// Commitments to alpha values (A_i = alpha_i * G)
+    /// Commitments to alpha values (`A_i` = `alpha_i` * G)
     pub a: Vec<ProjectivePoint>,
-    /// Commitments to beta values (B_i = beta_i * PK_sum)
+    /// Commitments to beta values (`B_i` = `beta_i` * `PK_sum`)
     pub b: Vec<ProjectivePoint>,
     /// Response values: `c_i = alpha_i + e * permutation[i] + r_i`
     pub c: Vec<Scalar>,
@@ -152,7 +161,7 @@ pub struct ShuffleProof {
 
 /// Represents a participant in the mental poker game.
 ///
-/// Each player has a unique ID and their own ElGamal key pair
+/// Each player has a unique ID and their own `ElGamal` key pair
 /// for participating in distributed deck shuffling.
 #[derive(Clone)]
 pub struct Player {
@@ -162,6 +171,7 @@ pub struct Player {
 
 impl Player {
     /// Creates a new player with the given ID and generates a fresh key pair.
+    #[must_use]
     pub fn new(id: usize) -> Self {
         Self {
             id,
@@ -170,6 +180,7 @@ impl Player {
     }
 
     /// Returns the player's public key for use in encryption and verification.
+    #[must_use]
     pub fn public_key(&self) -> ProjectivePoint {
         self.keypair.public_key
     }
@@ -178,6 +189,7 @@ impl Player {
 /// Computes the sum of all players' public keys.
 ///
 /// This combined public key is used for rerandomization during shuffling.
+#[must_use]
 pub fn compute_public_key_sum(players: &[Player]) -> ProjectivePoint {
     players
         .iter()
@@ -239,11 +251,15 @@ impl Deck {
     ///
     /// Uses SHA-256 to derive scalars from card identifiers, then multiplies
     /// by the generator to obtain points on secp256k1.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MentalPokerError::DeckInitializationFailed` if unable to generate valid scalars.
     pub fn new() -> Result<Self, MentalPokerError> {
         let mut cards = Vec::with_capacity(DECK_SIZE);
 
         for i in 0..DECK_SIZE {
-            let card_data = format!("CARD_{}", i);
+            let card_data = format!("CARD_{i}");
             let scalar = Self::hash_to_valid_scalar(card_data.as_bytes())?;
 
             cards.push(ProjectivePoint::GENERATOR * scalar);
@@ -277,7 +293,11 @@ impl Deck {
         Err(MentalPokerError::DeckInitializationFailed)
     }
 
-    /// Encrypts all cards in the deck using the provided ElGamal encryptor.
+    /// Encrypts all cards in the deck using the provided `ElGamal` encryptor.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MentalPokerError::InvalidMessagePoint` if any card point is the identity point.
     pub fn encrypt_deck(
         &self,
         encryptor: &ElGamal,
@@ -292,7 +312,7 @@ impl Deck {
 /// Implements the Bayer-Groth shuffle protocol for verifiable deck shuffling.
 ///
 /// The Bayer-Groth shuffle is a zero-knowledge proof that a permutation
-/// was applied to a sequence of ElGamal ciphertexts. This allows multiple
+/// was applied to a sequence of `ElGamal` ciphertexts. This allows multiple
 /// players to shuffle a deck without any single player learning the order.
 pub struct BayerGrothShuffle {
     public_key_sum: ProjectivePoint,
@@ -300,12 +320,14 @@ pub struct BayerGrothShuffle {
 
 impl BayerGrothShuffle {
     /// Creates a new shuffle instance with the given players.
+    #[must_use]
     pub fn new(players: &[Player]) -> Self {
         let public_key_sum = compute_public_key_sum(players);
         Self { public_key_sum }
     }
 
     /// Creates a new shuffle instance with a precomputed public key sum.
+    #[must_use]
     pub fn with_public_key_sum(public_key_sum: ProjectivePoint) -> Self {
         Self { public_key_sum }
     }
@@ -316,6 +338,11 @@ impl BayerGrothShuffle {
     /// 1. Applying a random permutation to the ciphertexts
     /// 2. Rerandomizing each ciphertext with fresh random values
     /// 3. Generating a proof that the permutation and rerandomization were done correctly
+    ///
+    /// # Errors
+    ///
+    /// Returns `MentalPokerError::InvalidVectorLength` if ciphertexts and commitments have mismatched lengths.
+    /// Returns `MentalPokerError::ScalarConversionFailed` if challenge hash cannot be converted to scalar.
     pub fn shuffle<R: rand::Rng + rand::CryptoRng>(
         &self,
         ciphertexts: &[ElGamalCiphertext],
@@ -372,7 +399,7 @@ impl BayerGrothShuffle {
             inverse_perm[permutation[i]] = i;
         }
 
-        for &source_index in inverse_perm.iter() {
+        for &source_index in &inverse_perm {
             let r_i: Scalar = Scalar::random(&mut *rng);
             let c_i = alpha[source_index] + e * Scalar::from(source_index as u64) + r_i;
             c.push(c_i);
@@ -399,6 +426,11 @@ impl BayerGrothShuffle {
     /// Note: This verifies that rerandomization was done correctly but does not
     /// fully verify the permutation. For complete verification, a full Bayer-Groth
     /// implementation with enhanced proof structure would be required.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MentalPokerError::InvalidVectorLength` if input vectors have mismatched lengths.
+    /// Returns `MentalPokerError::InvalidCommitmentLength` if proof dimensions are incorrect.
     pub fn verify_shuffle(
         original: &[ElGamalCiphertext],
         shuffled: &[ElGamalCiphertext],
@@ -455,9 +487,9 @@ impl BayerGrothShuffle {
         let diff_c1_bytes = diff_c1.to_bytes();
         let sum_a_bytes = sum_a.to_bytes();
         let diff_c2_bytes = diff_c2.to_bytes();
-        let sum_b_bytes = sum_b.to_bytes();
+        let b_bytes = sum_b.to_bytes();
 
-        Ok(diff_c1_bytes == sum_a_bytes && diff_c2_bytes == sum_b_bytes)
+        Ok(diff_c1_bytes == sum_a_bytes && diff_c2_bytes == b_bytes)
     }
 }
 
@@ -481,6 +513,11 @@ impl MentalPokerTable {
     /// Creates a new mental poker table with the specified number of players.
     ///
     /// Initializes players, creates a new deck, and encrypts all cards.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MentalPokerError::DuplicatePlayerIdInitialization` if duplicate player IDs are detected.
+    /// Returns `MentalPokerError::DeckInitializationFailed` if deck creation fails.
     pub fn new(num_players: usize) -> Result<Self, MentalPokerError> {
         let players: Vec<Player> = (0..num_players).map(Player::new).collect();
 
@@ -524,7 +561,11 @@ impl MentalPokerTable {
     ///
     /// # Returns
     ///
-    /// `Ok(true)` if the shuffle was successful, `Err` if the player is not authorized
+    /// `Ok(())` if the shuffle was successful, `Err` if the player is not authorized
+    ///
+    /// # Errors
+    ///
+    /// Returns `MentalPokerError::InvalidPlayerId` if `player_id` is out of range.
     pub fn shuffle_deck(&mut self, player_id: usize) -> Result<(), MentalPokerError> {
         if player_id >= self.players.len() {
             return Err(MentalPokerError::InvalidPlayerId(
@@ -551,6 +592,11 @@ impl MentalPokerTable {
     }
 
     /// Verifies the most recent shuffle proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MentalPokerError::ShuffleVerificationFailed` if no proof exists.
+    /// Returns `MentalPokerError::InvalidVectorLength` or other errors from `verify_shuffle`.
     pub fn verify_last_shuffle(&self) -> Result<bool, MentalPokerError> {
         if self.shuffle_proofs.is_empty() {
             return Ok(true);
@@ -574,6 +620,11 @@ impl MentalPokerTable {
     /// # Returns
     ///
     /// Ok with the encrypted card ciphertext, or Err if dealing failed
+    ///
+    /// # Errors
+    ///
+    /// Returns `MentalPokerError::InvalidPlayerId` if `player_id` is out of range.
+    /// Returns `MentalPokerError::DeckEmpty` if deck is empty.
     pub fn deal_card(&mut self, player_id: usize) -> Result<ElGamalCiphertext, MentalPokerError> {
         if player_id >= self.players.len() {
             return Err(MentalPokerError::InvalidPlayerId(
@@ -595,8 +646,9 @@ impl MentalPokerTable {
     }
 
     /// Returns the cards dealt to a specific player.
+    #[must_use]
     pub fn get_player_hand(&self, player_id: usize) -> Option<&[ElGamalCiphertext]> {
-        self.player_hands.get(&player_id).map(|v| v.as_slice())
+        self.player_hands.get(&player_id).map(Vec::as_slice)
     }
 }
 
@@ -608,38 +660,58 @@ fn run_mental_poker_simulation() -> Result<(), MentalPokerError> {
     let num_players = DEFAULT_NUM_PLAYERS;
     let mut table = MentalPokerTable::new(num_players)?;
 
-    println!("=== 1. SETUP PHASE ===\n");
-    println!("Players: {}", num_players);
+    print_setup_phase(num_players, &table.players);
+    run_shuffle_rounds(&mut table, num_players);
 
-    for player in &table.players {
+    let player_ids: Vec<usize> = table.players.iter().map(|p| p.id).collect();
+    run_dealing_rounds(&mut table, &player_ids);
+    run_decryption_phase(&table, &player_ids);
+    run_security_verification(&table);
+
+    run_shuffle_verification_test();
+    print_summary(num_players, &table);
+
+    Ok(())
+}
+
+fn print_setup_phase(num_players: usize, players: &[Player]) {
+    println!("=== 1. SETUP PHASE\n");
+    println!("Players: {num_players}");
+
+    for player in players {
         let pk_bytes = player.public_key().to_bytes();
         let start = hex::encode(&pk_bytes[..8.min(pk_bytes.len())]);
         let end = hex::encode(&pk_bytes[pk_bytes.len().saturating_sub(8)..]);
         println!("  Player {} public key: {}...{}", player.id, start, end);
     }
 
-    let deck = Deck::new()?;
+    let deck = Deck::new().expect("Failed to create deck");
     println!(
         "\n  Deck created with {} cards (each mapped to curve point)",
         deck.cards.len()
     );
 
-    let _encrypted_deck = deck.encrypt_deck(&table.dealer)?;
+    let dealer = ElGamal::new();
+    let _encrypted_deck = deck.encrypt_deck(&dealer).expect("Failed to encrypt deck");
     println!("  Dealer encrypted all cards with ElGamal\n");
+}
 
-    println!("=== 2. SHUFFLE PHASE ===\n");
+fn run_shuffle_rounds(table: &mut MentalPokerTable, num_players: usize) {
+    println!("=== 2. SHUFFLE PHASE\n");
 
     for shuffle_round in 1..=2 {
-        println!("  Shuffle Round {}:", shuffle_round);
+        println!("  Shuffle Round {shuffle_round}:");
 
         let player_id = (shuffle_round - 1) % num_players;
-        println!("    Shuffler: Player {}", player_id);
+        println!("    Shuffler: Player {player_id}");
 
         let before_count = table.shuffled_deck.len();
-        table.shuffle_deck(player_id)?;
+        table
+            .shuffle_deck(player_id)
+            .expect("Shuffle should succeed");
         let after_count = table.shuffled_deck.len();
 
-        println!("    Deck size: {} -> {}", before_count, after_count);
+        println!("    Deck size: {before_count} -> {after_count}");
 
         if let Some(proof) = table.shuffle_proofs.last() {
             println!(
@@ -656,40 +728,39 @@ fn run_mental_poker_simulation() -> Result<(), MentalPokerError> {
                     );
                 }
                 Err(e) => {
-                    println!("    Proof verification: ERROR - {:?}\n", e);
+                    println!("    Proof verification: ERROR - {e:?}\n");
                 }
-            };
+            }
         }
     }
+}
 
-    println!("=== 3. DEALING PHASE ===\n");
-
-    let player_ids: Vec<usize> = table.players.iter().map(|p| p.id).collect();
+fn run_dealing_rounds(table: &mut MentalPokerTable, player_ids: &[usize]) {
+    println!("=== 3. DEALING PHASE\n");
 
     for round in 1..=5 {
-        println!("  Dealing Round {}:", round);
-        for &player_id in &player_ids {
+        println!("  Dealing Round {round}:");
+        for &player_id in player_ids {
             match table.deal_card(player_id) {
                 Ok(card) => {
                     let c1_len = card.c1.to_bytes().len();
                     let c2_len = card.c2.to_bytes().len();
                     let c1_start = hex::encode(&card.c1.to_bytes()[..8.min(c1_len)]);
                     let c2_end = hex::encode(&card.c2.to_bytes()[c2_len.saturating_sub(8)..]);
-                    println!(
-                        "    Player {} received: {}...{}",
-                        player_id, c1_start, c2_end
-                    );
+                    println!("    Player {player_id} received: {c1_start}...{c2_end}");
                 }
-                Err(e) => println!("    Player {} deal error: {}", player_id, e),
+                Err(e) => println!("    Player {player_id} deal error: {e}"),
             }
         }
     }
+}
 
+fn run_decryption_phase(table: &MentalPokerTable, player_ids: &[usize]) {
     println!("\n=== 4. DECRYPTION PHASE (Distributed) ===\n");
 
-    for player_id in &player_ids {
+    for player_id in player_ids {
         if let Some(hand) = table.get_player_hand(*player_id) {
-            println!("  Player {}'s hand ({} cards):", player_id, hand.len());
+            println!("  Player {player_id}'s hand ({} cards):", hand.len());
             for (i, card) in hand.iter().enumerate() {
                 let decrypted = table.dealer.decrypt(card).expect("Decrypt should succeed");
                 let card_bytes = decrypted.to_bytes();
@@ -700,16 +771,18 @@ fn run_mental_poker_simulation() -> Result<(), MentalPokerError> {
             }
         }
     }
+}
 
+fn run_security_verification(table: &MentalPokerTable) {
     println!("\n=== 5. SECURITY VERIFICATION ===\n");
 
     let final_deck_size = table.shuffled_deck.len();
     let original_size = table.encrypted_deck.len();
-    let dealt_cards: usize = table.player_hands.values().map(|h| h.len()).sum();
+    let dealt_cards: usize = table.player_hands.values().map(Vec::len).sum();
 
-    println!("  Original deck size: {}", original_size);
-    println!("  Cards dealt: {}", dealt_cards);
-    println!("  Remaining in deck: {}", final_deck_size);
+    println!("  Original deck size: {original_size}");
+    println!("  Cards dealt: {dealt_cards}");
+    println!("  Remaining in deck: {final_deck_size}");
     println!(
         "  Conservation check: {} + {} = {} ✓",
         dealt_cards,
@@ -728,7 +801,9 @@ fn run_mental_poker_simulation() -> Result<(), MentalPokerError> {
             "NO ✗"
         }
     );
+}
 
+fn run_shuffle_verification_test() {
     println!("\n========================================");
     println!("  BAYER-GROTH SHUFFLE VERIFICATION");
     println!("========================================\n");
@@ -763,15 +838,14 @@ fn run_mental_poker_simulation() -> Result<(), MentalPokerError> {
             "  Shuffle verification: {}\n",
             if is_valid { "PASSED" } else { "FAILED" }
         ),
-        Err(e) => println!("  Shuffle verification: ERROR - {:?}\n", e),
+        Err(e) => println!("  Shuffle verification: ERROR - {e:?}\n"),
     }
+}
 
+fn print_summary(num_players: usize, table: &MentalPokerTable) {
     println!("=== SUMMARY ===");
-    println!(
-        "✓ Mental poker protocol initialized with {} players",
-        num_players
-    );
-    println!("✓ Deck of {} cards encrypted on secp256k1", DECK_SIZE);
+    println!("✓ Mental poker protocol initialized with {num_players} players");
+    println!("✓ Deck of {DECK_SIZE} cards encrypted on secp256k1");
     println!(
         "✓ {} verifiable shuffle rounds completed",
         table.shuffle_proofs.len()
@@ -785,13 +859,11 @@ fn run_mental_poker_simulation() -> Result<(), MentalPokerError> {
     println!("  - Cards can only be decrypted cooperatively");
     println!("\nNote: Full production deployment requires additional");
     println!("cryptographic review and security hardening.");
-
-    Ok(())
 }
 
 fn main() {
     if let Err(e) = run_mental_poker_simulation() {
-        eprintln!("Error running simulation: {}", e);
+        eprintln!("Error running simulation: {e}");
         std::process::exit(1);
     }
 }
@@ -878,8 +950,7 @@ mod tests {
         let result = BayerGrothShuffle::verify_shuffle(&ciphertexts, &shuffled, &proof);
         assert!(
             matches!(result, Ok(true)),
-            "Shuffle verification should pass for valid proof, got: {:?}",
-            result
+            "Shuffle verification should pass for valid proof, got: {result:?}"
         );
     }
 
@@ -929,10 +1000,10 @@ mod tests {
             c2: ProjectivePoint::GENERATOR * Scalar::from(2u64),
         };
 
-        let display = format!("{}", ciphertext);
-        assert!(display.contains("("));
-        assert!(display.contains(")"));
-        assert!(display.contains(","));
+        let display = format!("{ciphertext}");
+        assert!(display.contains('('));
+        assert!(display.contains(')'));
+        assert!(display.contains(','));
     }
 
     #[test]
@@ -995,7 +1066,7 @@ mod tests {
             let verified = table
                 .verify_last_shuffle()
                 .expect("Verify should not error");
-            assert!(verified, "Shuffle {} should be verifiable", i);
+            assert!(verified, "Shuffle {i} should be verifiable");
         }
     }
 
