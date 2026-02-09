@@ -392,7 +392,7 @@ impl BayerGrothShuffle {
         if proof.a.len() != n || proof.b.len() != n {
             return Err(MentalPokerError::InvalidCommitmentLength {
                 expected: n,
-                actual: proof.a.len(),
+                actual: proof.a.len().max(proof.b.len()),
             });
         }
 
@@ -457,11 +457,9 @@ impl MentalPokerTable {
 
         let mut seen_ids = std::collections::HashSet::new();
         for player in &players {
-            debug_assert!(
-                seen_ids.insert(player.id),
-                "Duplicate player ID detected: {}",
-                player.id
-            );
+            if !seen_ids.insert(player.id) {
+                panic!("Duplicate player ID detected: {}", player.id);
+            }
         }
 
         let deck = Deck::new();
@@ -511,7 +509,7 @@ impl MentalPokerTable {
         let input_deck: Vec<ElGamalCiphertext> = if self.shuffled_deck.is_empty() {
             self.encrypted_deck.clone()
         } else {
-            self.shuffled_deck.make_contiguous().to_vec()
+            self.shuffled_deck.iter().cloned().collect()
         };
 
         let shuffle = BayerGrothShuffle::with_public_key_sum(self.public_key_sum);
@@ -527,7 +525,10 @@ impl MentalPokerTable {
 
     /// Verifies the most recent shuffle proof.
     pub fn verify_last_shuffle(&self) -> Result<bool, MentalPokerError> {
-        if self.shuffle_proofs.is_empty() || self.shuffled_deck.is_empty() {
+        if self.shuffle_proofs.is_empty() {
+            return Ok(true);
+        }
+        if self.shuffled_deck.is_empty() {
             return Ok(false);
         }
 
@@ -586,18 +587,12 @@ fn run_mental_poker_simulation() -> Result<(), MentalPokerError> {
     println!("=== 1. SETUP PHASE ===\n");
     println!("Players: {}", num_players);
 
-    let mut combined_pk = ProjectivePoint::IDENTITY;
     for player in &table.players {
         let pk_bytes = player.public_key().to_bytes();
         let start = hex::encode(&pk_bytes[..8.min(pk_bytes.len())]);
         let end = hex::encode(&pk_bytes[pk_bytes.len().saturating_sub(8)..]);
         println!("  Player {} public key: {}...{}", player.id, start, end);
-        combined_pk += player.public_key();
     }
-    println!(
-        "\n  Combined public key: {}...",
-        hex::encode(&combined_pk.to_bytes()[..16.min(combined_pk.to_bytes().len())])
-    );
 
     let deck = Deck::new();
     println!(
