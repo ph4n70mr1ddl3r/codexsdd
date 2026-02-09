@@ -1,6 +1,6 @@
+use k256::elliptic_curve::Field;
 use k256::elliptic_curve::PrimeField;
 use k256::elliptic_curve::group::GroupEncoding;
-use k256::elliptic_curve::Field;
 use k256::{ProjectivePoint, Scalar, SecretKey};
 use rand::prelude::SliceRandom;
 use rand::rngs::OsRng;
@@ -457,9 +457,11 @@ impl MentalPokerTable {
 
         let mut seen_ids = std::collections::HashSet::new();
         for player in &players {
-            if !seen_ids.insert(player.id) {
-                panic!("Duplicate player ID detected: {}", player.id);
-            }
+            debug_assert!(
+                seen_ids.insert(player.id),
+                "Duplicate player ID detected: {}",
+                player.id
+            );
         }
 
         let deck = Deck::new();
@@ -509,7 +511,7 @@ impl MentalPokerTable {
         let input_deck: Vec<ElGamalCiphertext> = if self.shuffled_deck.is_empty() {
             self.encrypted_deck.clone()
         } else {
-            self.shuffled_deck.iter().cloned().collect()
+            self.shuffled_deck.make_contiguous().to_vec()
         };
 
         let shuffle = BayerGrothShuffle::with_public_key_sum(self.public_key_sum);
@@ -529,7 +531,10 @@ impl MentalPokerTable {
             return Ok(false);
         }
 
-        let proof = self.shuffle_proofs.last().ok_or(MentalPokerError::ShuffleVerificationFailed)?;
+        let proof = self
+            .shuffle_proofs
+            .last()
+            .ok_or(MentalPokerError::ShuffleVerificationFailed)?;
         let shuffled: Vec<ElGamalCiphertext> = self.shuffled_deck.iter().cloned().collect();
 
         BayerGrothShuffle::verify_shuffle(&self.last_shuffle_input, &shuffled, proof)
@@ -546,12 +551,18 @@ impl MentalPokerTable {
     /// Ok with the encrypted card ciphertext, or Err if dealing failed
     pub fn deal_card(&mut self, player_id: usize) -> Result<ElGamalCiphertext, MentalPokerError> {
         if player_id >= self.players.len() {
-            return Err(MentalPokerError::InvalidPlayerId(player_id, self.players.len()));
+            return Err(MentalPokerError::InvalidPlayerId(
+                player_id,
+                self.players.len(),
+            ));
         }
         if self.shuffled_deck.is_empty() {
             return Err(MentalPokerError::DeckEmpty);
         }
-        let card = self.shuffled_deck.pop_front().ok_or(MentalPokerError::DeckEmpty)?;
+        let card = self
+            .shuffled_deck
+            .pop_front()
+            .ok_or(MentalPokerError::DeckEmpty)?;
         if let Some(hand) = self.player_hands.get_mut(&player_id) {
             hand.push(card.clone());
         }
@@ -811,8 +822,7 @@ mod tests {
                 let msg = ProjectivePoint::GENERATOR * Scalar::random(&mut OsRng);
                 ElGamalCiphertext {
                     c1: ProjectivePoint::GENERATOR * Scalar::random(&mut OsRng),
-                    c2: msg
-                        + (shuffle.compute_public_key_sum() * Scalar::random(&mut OsRng)),
+                    c2: msg + (shuffle.compute_public_key_sum() * Scalar::random(&mut OsRng)),
                 }
             })
             .collect();
@@ -833,8 +843,7 @@ mod tests {
                 let msg = ProjectivePoint::GENERATOR * Scalar::random(&mut OsRng);
                 ElGamalCiphertext {
                     c1: ProjectivePoint::GENERATOR * Scalar::random(&mut OsRng),
-                    c2: msg
-                        + (shuffle.compute_public_key_sum() * Scalar::random(&mut OsRng)),
+                    c2: msg + (shuffle.compute_public_key_sum() * Scalar::random(&mut OsRng)),
                 }
             })
             .collect();
@@ -846,7 +855,8 @@ mod tests {
         let result = BayerGrothShuffle::verify_shuffle(&ciphertexts, &shuffled, &proof);
         assert!(
             matches!(result, Ok(true)),
-            "Shuffle verification should pass for valid proof, got: {:?}", result
+            "Shuffle verification should pass for valid proof, got: {:?}",
+            result
         );
     }
 
