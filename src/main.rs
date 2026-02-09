@@ -9,6 +9,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 
 const DECK_SIZE: usize = 52;
+const DEFAULT_NUM_PLAYERS: usize = 2;
 const COMPRESSED_POINT_SIZE: usize = 33;
 
 #[derive(Debug, thiserror::Error)]
@@ -269,10 +270,7 @@ impl Deck {
             let scalar_option = Scalar::from_repr(hash.into()).into_option();
             if let Some(scalar) = scalar_option {
                 if scalar != Scalar::ZERO {
-                    let point = ProjectivePoint::GENERATOR * scalar;
-                    if point != ProjectivePoint::IDENTITY {
-                        return Ok(scalar);
-                    }
+                    return Ok(scalar);
                 }
             }
         }
@@ -409,7 +407,10 @@ impl BayerGrothShuffle {
         let n = original.len();
 
         if n == 0 {
-            return Ok(true);
+            return Err(MentalPokerError::InvalidVectorLength {
+                expected: 1,
+                actual: 0,
+            });
         }
 
         if proof.a.len() != n || proof.b.len() != n {
@@ -604,7 +605,7 @@ fn run_mental_poker_simulation() -> Result<(), MentalPokerError> {
     println!("  MENTAL POKER with BAYER-GROTH SHUFFLE");
     println!("========================================\n");
 
-    let num_players = 2;
+    let num_players = DEFAULT_NUM_PLAYERS;
     let mut table = MentalPokerTable::new(num_players)?;
 
     println!("=== 1. SETUP PHASE ===\n");
@@ -732,7 +733,7 @@ fn run_mental_poker_simulation() -> Result<(), MentalPokerError> {
     println!("  BAYER-GROTH SHUFFLE VERIFICATION");
     println!("========================================\n");
 
-    let test_players: Vec<Player> = (0..2).map(Player::new).collect();
+    let test_players: Vec<Player> = (0..DEFAULT_NUM_PLAYERS).map(Player::new).collect();
     let shuffle = BayerGrothShuffle::new(&test_players);
     let test_ciphertexts: Vec<ElGamalCiphertext> = (0..5)
         .map(|_| {
@@ -800,6 +801,8 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
+    const TEST_DECK_SIZE: usize = 10;
+
     #[test]
     fn test_elgamal_encrypt_decrypt() {
         let elgamal = ElGamal::new();
@@ -837,7 +840,7 @@ mod tests {
         let players: Vec<Player> = (0..2).map(Player::new).collect();
         let shuffle = BayerGrothShuffle::new(&players);
 
-        let ciphertexts: Vec<ElGamalCiphertext> = (0..10)
+        let ciphertexts: Vec<ElGamalCiphertext> = (0..TEST_DECK_SIZE)
             .map(|_| {
                 let msg = ProjectivePoint::GENERATOR * Scalar::random(&mut OsRng);
                 ElGamalCiphertext {
@@ -1000,7 +1003,25 @@ mod tests {
     fn test_empty_shuffle_verification() {
         let table = MentalPokerTable::new(2).expect("Failed to create table");
         let result = table.verify_last_shuffle();
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Empty shuffle list should return Ok(true)");
         assert!(result.unwrap(), "Empty shuffle list should return true");
+    }
+
+    #[test]
+    fn test_verify_shuffle_empty_input() {
+        let players: Vec<Player> = (0..2).map(Player::new).collect();
+        let _shuffle = BayerGrothShuffle::new(&players);
+        let proof = ShuffleProof {
+            a: Vec::new(),
+            b: Vec::new(),
+            c: Vec::new(),
+            r: Vec::new(),
+        };
+        let result = BayerGrothShuffle::verify_shuffle(&[], &[], &proof);
+        assert!(result.is_err());
+        assert!(matches!(
+            result,
+            Err(MentalPokerError::InvalidVectorLength { .. })
+        ));
     }
 }
