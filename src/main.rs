@@ -19,6 +19,9 @@ const DEFAULT_DEALING_ROUNDS: usize = 5;
 /// Size of compressed secp256k1 point in bytes
 const COMPRESSED_POINT_SIZE: usize = 33;
 
+type Commitments = Vec<ProjectivePoint>;
+type Responses = Vec<Scalar>;
+
 #[derive(Debug, thiserror::Error)]
 pub enum MentalPokerError {
     #[error("Deck initialization failed after maximum retries")]
@@ -50,7 +53,7 @@ pub enum MentalPokerError {
 /// In `ElGamal` on elliptic curves:
 /// - c1 = r * G (random point)
 /// - c2 = m + r * PK (message point plus random multiple of public key)
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ElGamalCiphertext {
     pub c1: ProjectivePoint,
     pub c2: ProjectivePoint,
@@ -76,6 +79,7 @@ pub struct ElGamalKeyPair {
 
 impl ElGamalKeyPair {
     /// Generates a new random `ElGamal` key pair using secure random number generation.
+    #[must_use]
     pub fn generate() -> Self {
         let secret_key = SecretKey::random(&mut OsRng);
         let public_key = ProjectivePoint::GENERATOR * secret_key.to_nonzero_scalar().as_ref();
@@ -157,13 +161,13 @@ impl ElGamal {
 #[derive(Debug, Clone)]
 pub struct ShuffleProof {
     /// Commitments to alpha values (`A_i` = `alpha_i` * G)
-    a: Vec<ProjectivePoint>,
+    a: Commitments,
     /// Commitments to beta values (`B_i` = `beta_i` * `PK_sum`)
-    b: Vec<ProjectivePoint>,
+    b: Commitments,
     /// Response values: `c_i = alpha_i + e * permutation[i] + r_i`
-    c: Vec<Scalar>,
+    c: Responses,
     /// Random values used in responses
-    r: Vec<Scalar>,
+    r: Responses,
 }
 
 impl ShuffleProof {
@@ -393,9 +397,7 @@ impl BayerGrothShuffle {
     pub fn public_key_sum(&self) -> ProjectivePoint {
         self.public_key_sum
     }
-}
 
-impl BayerGrothShuffle {
     /// Creates a new shuffle instance with the given players.
     #[must_use]
     pub fn new(players: &[Player]) -> Self {
@@ -429,10 +431,8 @@ impl BayerGrothShuffle {
         let mut permutation: Vec<usize> = (0..n).collect();
         permutation.shuffle(rng);
 
-        let permuted: Vec<ElGamalCiphertext> = permutation
-            .iter()
-            .map(|&i| ciphertexts[i].clone())
-            .collect();
+        let permuted: Vec<ElGamalCiphertext> =
+            permutation.iter().map(|&i| ciphertexts[i]).collect();
 
         let mut rerandomized: Vec<ElGamalCiphertext> = Vec::with_capacity(n);
         let mut alpha: Vec<Scalar> = Vec::with_capacity(n);
@@ -536,24 +536,22 @@ impl BayerGrothShuffle {
             });
         }
 
-        let (orig_sum_c1, orig_sum_c2): (ProjectivePoint, ProjectivePoint) =
-            original.iter().map(|ct| (ct.c1, ct.c2)).fold(
-                (ProjectivePoint::IDENTITY, ProjectivePoint::IDENTITY),
-                |(sum_c1, sum_c2), (c1, c2)| (sum_c1 + c1, sum_c2 + c2),
-            );
-        let (shuffled_sum_c1, shuffled_sum_c2): (ProjectivePoint, ProjectivePoint) =
-            shuffled.iter().map(|ct| (ct.c1, ct.c2)).fold(
-                (ProjectivePoint::IDENTITY, ProjectivePoint::IDENTITY),
-                |(sum_c1, sum_c2), (c1, c2)| (sum_c1 + c1, sum_c2 + c2),
-            );
-
-        let diff_c1 = shuffled_sum_c1 - orig_sum_c1;
-        let diff_c2 = shuffled_sum_c2 - orig_sum_c2;
+        let orig_sum = Self::sum_ciphertexts(original);
+        let shuffled_sum = Self::sum_ciphertexts(shuffled);
+        let diff_c1 = shuffled_sum.0 - orig_sum.0;
+        let diff_c2 = shuffled_sum.1 - orig_sum.1;
 
         let sum_a: ProjectivePoint = proof.commitments_a().iter().sum();
         let sum_b: ProjectivePoint = proof.commitments_b().iter().sum();
 
         Ok(diff_c1 == sum_a && diff_c2 == sum_b)
+    }
+
+    fn sum_ciphertexts(ciphertexts: &[ElGamalCiphertext]) -> (ProjectivePoint, ProjectivePoint) {
+        ciphertexts.iter().map(|ct| (ct.c1, ct.c2)).fold(
+            (ProjectivePoint::IDENTITY, ProjectivePoint::IDENTITY),
+            |(sum_c1, sum_c2), (c1, c2)| (sum_c1 + c1, sum_c2 + c2),
+        )
     }
 }
 
@@ -662,7 +660,7 @@ impl MentalPokerTable {
         let input_deck: Vec<ElGamalCiphertext> = if self.shuffled_deck.is_empty() {
             self.encrypted_deck.to_vec()
         } else {
-            self.shuffled_deck.iter().cloned().collect()
+            self.shuffled_deck.iter().copied().collect()
         };
 
         let shuffle = BayerGrothShuffle::with_public_key_sum(self.public_key_sum);
@@ -692,7 +690,7 @@ impl MentalPokerTable {
             .last()
             .ok_or(MentalPokerError::ShuffleVerificationFailed)?;
 
-        let shuffled_vec: Vec<ElGamalCiphertext> = self.shuffled_deck.iter().cloned().collect();
+        let shuffled_vec: Vec<ElGamalCiphertext> = self.shuffled_deck.iter().copied().collect();
         BayerGrothShuffle::verify_shuffle(&self.last_shuffle_input, &shuffled_vec, proof)
     }
 
@@ -725,7 +723,7 @@ impl MentalPokerTable {
             .pop_front()
             .ok_or(MentalPokerError::DeckEmpty)?;
         if let Some(hand) = self.player_hands.get_mut(&player_id) {
-            hand.push(card.clone());
+            hand.push(card);
         }
         Ok(card)
     }
