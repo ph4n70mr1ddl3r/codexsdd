@@ -8,10 +8,15 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 
+/// Number of cards in a standard playing card deck
 const DECK_SIZE: usize = 52;
+/// Default number of players for simulations
 const DEFAULT_NUM_PLAYERS: usize = 2;
+/// Default number of shuffle rounds each deck undergoes
 const DEFAULT_SHUFFLE_ROUNDS: usize = 2;
+/// Default number of cards dealt to each player
 const DEFAULT_DEALING_ROUNDS: usize = 5;
+/// Size of compressed secp256k1 point in bytes
 const COMPRESSED_POINT_SIZE: usize = 33;
 
 #[derive(Debug, thiserror::Error)]
@@ -152,13 +157,43 @@ impl ElGamal {
 #[derive(Debug, Clone)]
 pub struct ShuffleProof {
     /// Commitments to alpha values (`A_i` = `alpha_i` * G)
-    pub a: Vec<ProjectivePoint>,
+    a: Vec<ProjectivePoint>,
     /// Commitments to beta values (`B_i` = `beta_i` * `PK_sum`)
-    pub b: Vec<ProjectivePoint>,
+    b: Vec<ProjectivePoint>,
     /// Response values: `c_i = alpha_i + e * permutation[i] + r_i`
-    pub c: Vec<Scalar>,
+    c: Vec<Scalar>,
     /// Random values used in responses
-    pub r: Vec<Scalar>,
+    r: Vec<Scalar>,
+}
+
+impl ShuffleProof {
+    /// Returns the commitments to alpha values
+    #[must_use]
+    #[inline]
+    pub fn commitments_a(&self) -> &[ProjectivePoint] {
+        &self.a
+    }
+
+    /// Returns the commitments to beta values
+    #[must_use]
+    #[inline]
+    pub fn commitments_b(&self) -> &[ProjectivePoint] {
+        &self.b
+    }
+
+    /// Returns the response values
+    #[must_use]
+    #[inline]
+    pub fn responses_c(&self) -> &[Scalar] {
+        &self.c
+    }
+
+    /// Returns the random values used in responses
+    #[must_use]
+    #[inline]
+    pub fn responses_r(&self) -> &[Scalar] {
+        &self.r
+    }
 }
 
 /// Represents a participant in the mental poker game.
@@ -167,7 +202,7 @@ pub struct ShuffleProof {
 /// for participating in distributed deck shuffling.
 #[derive(Clone)]
 pub struct Player {
-    pub id: usize,
+    id: usize,
     keypair: ElGamalKeyPair,
 }
 
@@ -189,8 +224,16 @@ impl Player {
         }
     }
 
+    /// Returns the player's ID
+    #[must_use]
+    #[inline]
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
     /// Returns the player's public key for use in encryption and verification.
     #[must_use]
+    #[inline]
     pub fn public_key(&self) -> ProjectivePoint {
         self.keypair.public_key
     }
@@ -209,9 +252,7 @@ impl Player {
 /// The sum of all player public keys as a single curve point
 #[must_use]
 pub fn compute_public_key_sum(players: &[Player]) -> ProjectivePoint {
-    players
-        .iter()
-        .fold(ProjectivePoint::IDENTITY, |acc, p| acc + p.public_key())
+    players.iter().map(|p| p.public_key()).sum()
 }
 
 /// A deck of 52 playing cards, each mapped to a point on the elliptic curve.
@@ -219,7 +260,16 @@ pub fn compute_public_key_sum(players: &[Player]) -> ProjectivePoint {
 /// Cards are mapped to curve points using SHA-256 hash-to-point derivation
 /// to ensure uniform distribution on the curve.
 pub struct Deck {
-    pub cards: Vec<ProjectivePoint>,
+    cards: Vec<ProjectivePoint>,
+}
+
+impl Deck {
+    /// Returns a reference to the cards in the deck
+    #[must_use]
+    #[inline]
+    pub fn cards(&self) -> &[ProjectivePoint] {
+        &self.cards
+    }
 }
 
 fn build_hash_input(
@@ -260,7 +310,7 @@ fn build_hash_input(
 
 impl Default for Deck {
     fn default() -> Self {
-        Self::new().expect("Failed to create deck")
+        Self::new().unwrap_or_else(|_| panic!("Deck::default() failed: could not initialize deck"))
     }
 }
 
@@ -320,7 +370,7 @@ impl Deck {
         &self,
         encryptor: &ElGamal,
     ) -> Result<Vec<ElGamalCiphertext>, MentalPokerError> {
-        self.cards
+        self.cards()
             .iter()
             .map(|card| encryptor.encrypt(card))
             .collect()
@@ -334,6 +384,15 @@ impl Deck {
 /// players to shuffle a deck without any single player learning the order.
 pub struct BayerGrothShuffle {
     public_key_sum: ProjectivePoint,
+}
+
+impl BayerGrothShuffle {
+    /// Returns the public key sum used for rerandomization
+    #[must_use]
+    #[inline]
+    pub fn public_key_sum(&self) -> ProjectivePoint {
+        self.public_key_sum
+    }
 }
 
 impl BayerGrothShuffle {
@@ -477,30 +536,16 @@ impl BayerGrothShuffle {
             });
         }
 
-        let orig_sum_c1 = original
-            .iter()
-            .fold(ProjectivePoint::IDENTITY, |acc, ct| acc + ct.c1);
-        let orig_sum_c2 = original
-            .iter()
-            .fold(ProjectivePoint::IDENTITY, |acc, ct| acc + ct.c2);
-        let shuffled_sum_c1 = shuffled
-            .iter()
-            .fold(ProjectivePoint::IDENTITY, |acc, ct| acc + ct.c1);
-        let shuffled_sum_c2 = shuffled
-            .iter()
-            .fold(ProjectivePoint::IDENTITY, |acc, ct| acc + ct.c2);
+        let orig_sum_c1: ProjectivePoint = original.iter().map(|ct| ct.c1).sum();
+        let orig_sum_c2: ProjectivePoint = original.iter().map(|ct| ct.c2).sum();
+        let shuffled_sum_c1: ProjectivePoint = shuffled.iter().map(|ct| ct.c1).sum();
+        let shuffled_sum_c2: ProjectivePoint = shuffled.iter().map(|ct| ct.c2).sum();
 
         let diff_c1 = shuffled_sum_c1 - orig_sum_c1;
         let diff_c2 = shuffled_sum_c2 - orig_sum_c2;
 
-        let sum_a = proof
-            .a
-            .iter()
-            .fold(ProjectivePoint::IDENTITY, |acc, pt| acc + pt);
-        let sum_b = proof
-            .b
-            .iter()
-            .fold(ProjectivePoint::IDENTITY, |acc, pt| acc + pt);
+        let sum_a: ProjectivePoint = proof.commitments_a().iter().sum();
+        let sum_b: ProjectivePoint = proof.commitments_b().iter().sum();
 
         Ok(diff_c1 == sum_a && diff_c2 == sum_b)
     }
@@ -554,6 +599,34 @@ impl MentalPokerTable {
             player_hands,
             public_key_sum,
         })
+    }
+
+    /// Returns a reference to the players
+    #[must_use]
+    #[inline]
+    pub fn players(&self) -> &[Player] {
+        &self.players
+    }
+
+    /// Returns the current size of the shuffled deck
+    #[must_use]
+    #[inline]
+    pub fn shuffled_deck_size(&self) -> usize {
+        self.shuffled_deck.len()
+    }
+
+    /// Returns the number of shuffle proofs generated
+    #[must_use]
+    #[inline]
+    pub fn shuffle_proofs_count(&self) -> usize {
+        self.shuffle_proofs.len()
+    }
+
+    /// Returns a reference to the encrypted deck
+    #[must_use]
+    #[inline]
+    pub fn encrypted_deck(&self) -> &[ElGamalCiphertext] {
+        &self.encrypted_deck
     }
 
     /// Shuffles the deck using the Bayer-Groth shuffle protocol.
@@ -674,10 +747,10 @@ fn run_mental_poker_simulation() -> Result<(), MentalPokerError> {
     let num_players = DEFAULT_NUM_PLAYERS;
     let mut table = MentalPokerTable::new(num_players)?;
 
-    print_setup_phase(num_players, &table.players);
+    print_setup_phase(num_players, table.players());
     run_shuffle_rounds(&mut table, num_players);
 
-    let player_ids: Vec<usize> = table.players.iter().map(|p| p.id).collect();
+    let player_ids: Vec<usize> = table.players().iter().map(|p| p.id()).collect();
     run_dealing_rounds(&mut table, &player_ids);
     run_decryption_phase(&table, &player_ids);
     run_security_verification(&table);
@@ -858,7 +931,7 @@ fn print_summary(num_players: usize, table: &MentalPokerTable) {
     println!("✓ Deck of {DECK_SIZE} cards encrypted on secp256k1");
     println!(
         "✓ {} verifiable shuffle rounds completed",
-        table.shuffle_proofs.len()
+        table.shuffle_proofs_count()
     );
     println!("✓ Cards dealt to all players with proper encryption");
     println!("  (Bayer-Groth zero-knowledge proof verified)");
@@ -901,10 +974,10 @@ mod tests {
     #[test]
     fn test_deck_creation() {
         let deck = Deck::new().expect("Failed to create deck");
-        assert_eq!(deck.cards.len(), DECK_SIZE);
+        assert_eq!(deck.cards().len(), DECK_SIZE);
 
         let mut unique_points: HashSet<String> = HashSet::new();
-        for card in &deck.cards {
+        for card in deck.cards() {
             let bytes = hex::encode(card.to_bytes());
             assert!(unique_points.insert(bytes), "Duplicate card found");
         }
@@ -980,7 +1053,7 @@ mod tests {
             .expect("verify should not error");
         assert!(verified, "Shuffle should be verifiable");
 
-        let player_ids: Vec<usize> = table.players.iter().map(|p| p.id).collect();
+        let player_ids: Vec<usize> = table.players().iter().map(|p| p.id()).collect();
         for _ in 0..5 {
             for &player_id in &player_ids {
                 assert!(table.deal_card(player_id).is_ok());
@@ -991,9 +1064,7 @@ mod tests {
     #[test]
     fn test_public_key_sum() {
         let players: Vec<Player> = (0..3).map(Player::new).collect();
-        let sum1 = players
-            .iter()
-            .fold(ProjectivePoint::IDENTITY, |acc, p| acc + p.public_key());
+        let sum1: ProjectivePoint = players.iter().map(|p| p.public_key()).sum();
 
         let mut sum2 = ProjectivePoint::IDENTITY;
         for player in &players {
@@ -1187,7 +1258,7 @@ mod tests {
     fn test_card_points_are_distinct() {
         let deck = Deck::new().expect("Failed to create deck");
         let mut seen_points: HashSet<[u8; 33]> = HashSet::new();
-        for card in &deck.cards {
+        for card in deck.cards() {
             let bytes: [u8; 33] = card.to_bytes().into();
             assert!(seen_points.insert(bytes), "Duplicate card point detected");
         }
