@@ -310,7 +310,7 @@ fn build_hash_input(
 
 impl Default for Deck {
     fn default() -> Self {
-        Self::new().unwrap_or_else(|_| panic!("Deck::default() failed: could not initialize deck"))
+        Self::new().expect("Failed to initialize default deck")
     }
 }
 
@@ -660,7 +660,7 @@ impl MentalPokerTable {
         }
 
         let input_deck: Vec<ElGamalCiphertext> = if self.shuffled_deck.is_empty() {
-            self.encrypted_deck.clone()
+            self.encrypted_deck.to_vec()
         } else {
             self.shuffled_deck.iter().cloned().collect()
         };
@@ -773,9 +773,14 @@ fn print_setup_phase(num_players: usize, players: &[Player]) {
 
     for player in players {
         let pk_bytes = player.public_key().to_bytes();
-        let start = hex::encode(&pk_bytes[..8.min(pk_bytes.len())]);
-        let end = hex::encode(&pk_bytes[pk_bytes.len().saturating_sub(8)..]);
-        println!("  Player {} public key: {}...{}", player.id, start, end);
+        let prefix = format_hex_prefix(&pk_bytes, 8);
+        let suffix = format_hex_suffix(&pk_bytes, 8);
+        println!(
+            "  Player {} public key: {}...{}",
+            player.id(),
+            prefix,
+            suffix
+        );
     }
 
     println!(
@@ -805,8 +810,8 @@ fn run_shuffle_rounds(table: &mut MentalPokerTable, num_players: usize) {
         if let Some(proof) = table.shuffle_proofs.last() {
             println!(
                 "    Proof size: {} commitments, {} responses",
-                proof.a.len() + proof.b.len(),
-                proof.r.len()
+                proof.commitments_a().len() + proof.commitments_b().len(),
+                proof.responses_r().len()
             );
 
             match table.verify_last_shuffle() {
@@ -834,9 +839,9 @@ fn run_dealing_rounds(table: &mut MentalPokerTable, player_ids: &[usize]) {
                 Ok(card) => {
                     let c1_bytes = card.c1.to_bytes();
                     let c2_bytes = card.c2.to_bytes();
-                    let c1_start = hex::encode(&c1_bytes[..8.min(c1_bytes.len())]);
-                    let c2_end = hex::encode(&c2_bytes[c2_bytes.len().saturating_sub(8)..]);
-                    println!("    Player {player_id} received: {c1_start}...{c2_end}");
+                    let c1_prefix = format_hex_prefix(&c1_bytes, 8);
+                    let c2_suffix = format_hex_suffix(&c2_bytes, 8);
+                    println!("    Player {player_id} received: {c1_prefix}...{c2_suffix}");
                 }
                 Err(e) => println!("    Player {player_id} deal error: {e}"),
             }
@@ -853,10 +858,9 @@ fn run_decryption_phase(table: &MentalPokerTable, player_ids: &[usize]) {
             for (i, card) in hand.iter().enumerate() {
                 let decrypted = table.dealer.decrypt(card).expect("Decrypt should succeed");
                 let card_bytes = decrypted.to_bytes();
-                let len = card_bytes.len();
-                let start = hex::encode(&card_bytes[..8.min(len)]);
-                let end = hex::encode(&card_bytes[len.saturating_sub(8)..]);
-                println!("    Card {}: {}...{}", i + 1, start, end);
+                let prefix = format_hex_prefix(&card_bytes, 8);
+                let suffix = format_hex_suffix(&card_bytes, 8);
+                println!("    Card {}: {}...{}", i + 1, prefix, suffix);
             }
         }
     }
@@ -865,8 +869,8 @@ fn run_decryption_phase(table: &MentalPokerTable, player_ids: &[usize]) {
 fn run_security_verification(table: &MentalPokerTable) {
     println!("\n=== 5. SECURITY VERIFICATION ===\n");
 
-    let final_deck_size = table.shuffled_deck.len();
-    let original_size = table.encrypted_deck.len();
+    let final_deck_size = table.shuffled_deck_size();
+    let original_size = table.encrypted_deck().len();
     let dealt_cards: usize = table.player_hands.values().map(Vec::len).sum();
 
     println!("  Original deck size: {original_size}");
@@ -918,8 +922,8 @@ fn run_shuffle_verification_test() {
         .expect("Shuffle should not fail in verification test");
     println!(
         "  Generated proof with {} A-points, {} B-points",
-        proof.a.len(),
-        proof.b.len()
+        proof.commitments_a().len(),
+        proof.commitments_b().len()
     );
 
     match BayerGrothShuffle::verify_shuffle(&test_ciphertexts, &shuffled, &proof) {
@@ -950,6 +954,17 @@ fn print_summary(num_players: usize, table: &MentalPokerTable) {
     println!("cryptographic review and security hardening.");
 }
 
+fn format_hex_prefix(bytes: &[u8], len: usize) -> String {
+    let prefix_len = len.min(bytes.len());
+    hex::encode(&bytes[..prefix_len])
+}
+
+fn format_hex_suffix(bytes: &[u8], len: usize) -> String {
+    let suffix_len = len.min(bytes.len());
+    let suffix_start = bytes.len().saturating_sub(suffix_len);
+    hex::encode(&bytes[suffix_start..])
+}
+
 fn main() {
     if let Err(e) = run_mental_poker_simulation() {
         eprintln!("Error running simulation: {e}");
@@ -963,11 +978,13 @@ mod tests {
     use std::collections::HashSet;
 
     const TEST_DECK_SIZE: usize = 10;
+    const TEST_SCALAR_1: u64 = 42;
+    const TEST_SCALAR_2: u64 = 2;
 
     #[test]
     fn test_elgamal_encrypt_decrypt() {
         let elgamal = ElGamal::new();
-        let message = ProjectivePoint::GENERATOR * Scalar::from(42u64);
+        let message = ProjectivePoint::GENERATOR * Scalar::from(TEST_SCALAR_1);
 
         let ciphertext = elgamal.encrypt(&message).expect("Encrypt should succeed");
         let decrypted = elgamal
@@ -1047,12 +1064,12 @@ mod tests {
     fn test_mental_poker_table_lifecycle() {
         let mut table = MentalPokerTable::new(3).expect("Failed to create table");
 
-        assert_eq!(table.shuffled_deck.len(), 0);
+        assert_eq!(table.shuffled_deck_size(), 0);
         assert_eq!(table.shuffle_proofs.len(), 0);
 
         assert!(table.shuffle_deck(0).is_ok());
-        assert_eq!(table.shuffled_deck.len(), DECK_SIZE);
-        assert_eq!(table.shuffle_proofs.len(), 1);
+        assert_eq!(table.shuffled_deck_size(), DECK_SIZE);
+        assert_eq!(table.shuffle_proofs_count(), 1);
 
         let verified = table
             .verify_last_shuffle()
@@ -1084,7 +1101,7 @@ mod tests {
     fn test_ciphertext_display() {
         let ciphertext = ElGamalCiphertext {
             c1: ProjectivePoint::GENERATOR,
-            c2: ProjectivePoint::GENERATOR * Scalar::from(2u64),
+            c2: ProjectivePoint::GENERATOR * Scalar::from(TEST_SCALAR_2),
         };
 
         let display = format!("{ciphertext}");
