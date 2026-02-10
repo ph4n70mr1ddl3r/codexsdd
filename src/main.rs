@@ -32,8 +32,8 @@ pub enum MentalPokerError {
     DeckEmpty,
     #[error("Invalid player initialization: duplicate player IDs detected")]
     DuplicatePlayerIdInitialization,
-    #[error("Invalid vector length: {expected} expected, {actual} provided")]
-    InvalidVectorLength { expected: usize, actual: usize },
+    #[error("Invalid vector length: expected {expected}, got {actual}")]
+    InvalidVectorLength { expected: String, actual: usize },
     #[error("Invalid message point: cannot encrypt identity point")]
     InvalidMessagePoint,
     #[error("Invalid ciphertext: contains invalid curve point")]
@@ -173,6 +173,14 @@ pub struct Player {
 
 impl Player {
     /// Creates a new player with the given ID and generates a fresh key pair.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Unique identifier for this player
+    ///
+    /// # Returns
+    ///
+    /// A new player instance with a generated ElGamal key pair
     #[must_use]
     pub fn new(id: usize) -> Self {
         Self {
@@ -191,6 +199,14 @@ impl Player {
 /// Computes the sum of all players' public keys.
 ///
 /// This combined public key is used for rerandomization during shuffling.
+///
+/// # Arguments
+///
+/// * `players` - Slice of players to aggregate public keys from
+///
+/// # Returns
+///
+/// The sum of all player public keys as a single curve point
 #[must_use]
 pub fn compute_public_key_sum(players: &[Player]) -> ProjectivePoint {
     players
@@ -214,13 +230,13 @@ fn build_hash_input(
     let n = ciphertexts.len();
     if n != commitments_a.len() {
         return Err(MentalPokerError::InvalidVectorLength {
-            expected: n,
+            expected: n.to_string(),
             actual: commitments_a.len(),
         });
     }
     if n != commitments_b.len() {
         return Err(MentalPokerError::InvalidVectorLength {
-            expected: n,
+            expected: n.to_string(),
             actual: commitments_b.len(),
         });
     }
@@ -442,7 +458,7 @@ impl BayerGrothShuffle {
 
         if n == 0 {
             return Err(MentalPokerError::InvalidVectorLength {
-                expected: 1,
+                expected: "at least 1".to_string(),
                 actual: 0,
             });
         }
@@ -461,30 +477,30 @@ impl BayerGrothShuffle {
             });
         }
 
-        let mut orig_sum_c1 = ProjectivePoint::IDENTITY;
-        let mut orig_sum_c2 = ProjectivePoint::IDENTITY;
-        let mut shuffled_sum_c1 = ProjectivePoint::IDENTITY;
-        let mut shuffled_sum_c2 = ProjectivePoint::IDENTITY;
-
-        for ct in original {
-            orig_sum_c1 += ct.c1;
-            orig_sum_c2 += ct.c2;
-        }
-        for ct in shuffled {
-            shuffled_sum_c1 += ct.c1;
-            shuffled_sum_c2 += ct.c2;
-        }
+        let orig_sum_c1 = original
+            .iter()
+            .fold(ProjectivePoint::IDENTITY, |acc, ct| acc + ct.c1);
+        let orig_sum_c2 = original
+            .iter()
+            .fold(ProjectivePoint::IDENTITY, |acc, ct| acc + ct.c2);
+        let shuffled_sum_c1 = shuffled
+            .iter()
+            .fold(ProjectivePoint::IDENTITY, |acc, ct| acc + ct.c1);
+        let shuffled_sum_c2 = shuffled
+            .iter()
+            .fold(ProjectivePoint::IDENTITY, |acc, ct| acc + ct.c2);
 
         let diff_c1 = shuffled_sum_c1 - orig_sum_c1;
         let diff_c2 = shuffled_sum_c2 - orig_sum_c2;
 
-        let mut sum_a = ProjectivePoint::IDENTITY;
-        let mut sum_b = ProjectivePoint::IDENTITY;
-
-        for i in 0..n {
-            sum_a += proof.a[i];
-            sum_b += proof.b[i];
-        }
+        let sum_a = proof
+            .a
+            .iter()
+            .fold(ProjectivePoint::IDENTITY, |acc, pt| acc + pt);
+        let sum_b = proof
+            .b
+            .iter()
+            .fold(ProjectivePoint::IDENTITY, |acc, pt| acc + pt);
 
         Ok(diff_c1 == sum_a && diff_c2 == sum_b)
     }
@@ -643,6 +659,14 @@ impl MentalPokerTable {
     }
 
     /// Returns the cards dealt to a specific player.
+    ///
+    /// # Arguments
+    ///
+    /// * `player_id` - ID of the player whose hand to retrieve
+    ///
+    /// # Returns
+    ///
+    /// A slice of encrypted cards in the player's hand, or None if player doesn't exist
     #[must_use]
     pub fn get_player_hand(&self, player_id: usize) -> Option<&[ElGamalCiphertext]> {
         self.player_hands.get(&player_id).map(Vec::as_slice)
