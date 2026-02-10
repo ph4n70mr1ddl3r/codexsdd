@@ -536,10 +536,16 @@ impl BayerGrothShuffle {
             });
         }
 
-        let orig_sum_c1: ProjectivePoint = original.iter().map(|ct| ct.c1).sum();
-        let orig_sum_c2: ProjectivePoint = original.iter().map(|ct| ct.c2).sum();
-        let shuffled_sum_c1: ProjectivePoint = shuffled.iter().map(|ct| ct.c1).sum();
-        let shuffled_sum_c2: ProjectivePoint = shuffled.iter().map(|ct| ct.c2).sum();
+        let (orig_sum_c1, orig_sum_c2): (ProjectivePoint, ProjectivePoint) =
+            original.iter().map(|ct| (ct.c1, ct.c2)).fold(
+                (ProjectivePoint::IDENTITY, ProjectivePoint::IDENTITY),
+                |(sum_c1, sum_c2), (c1, c2)| (sum_c1 + c1, sum_c2 + c2),
+            );
+        let (shuffled_sum_c1, shuffled_sum_c2): (ProjectivePoint, ProjectivePoint) =
+            shuffled.iter().map(|ct| (ct.c1, ct.c2)).fold(
+                (ProjectivePoint::IDENTITY, ProjectivePoint::IDENTITY),
+                |(sum_c1, sum_c2), (c1, c2)| (sum_c1 + c1, sum_c2 + c2),
+            );
 
         let diff_c1 = shuffled_sum_c1 - orig_sum_c1;
         let diff_c2 = shuffled_sum_c2 - orig_sum_c2;
@@ -656,7 +662,7 @@ impl MentalPokerTable {
         let input_deck: Vec<ElGamalCiphertext> = if self.shuffled_deck.is_empty() {
             self.encrypted_deck.clone()
         } else {
-            self.shuffled_deck.make_contiguous().to_vec()
+            self.shuffled_deck.iter().cloned().collect()
         };
 
         let shuffle = BayerGrothShuffle::with_public_key_sum(self.public_key_sum);
