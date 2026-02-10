@@ -74,8 +74,21 @@ koblitzelgamal/
 - Shuffle verification checks aggregate properties but not full permutation proof
 - No network protocol layer for real multi-player communication
 
+## Security Considerations
+
+**Important Limitations:**
+
+1. **Aggregate Proof Only**: The current shuffle verification (`verify_shuffle`) only checks aggregate properties of the shuffle. It verifies that the sum of rerandomization commitments matches the ciphertext differences, but it does NOT fully verify that the correct permutation was applied. A sophisticated attacker could potentially manipulate individual ciphertexts while preserving the aggregate sums.
+
+2. **Centralized Decryption**: All cards are encrypted with the dealer's public key, meaning only the dealer can decrypt cards. In a true multi-party mental poker protocol, threshold decryption should be used where multiple parties must collaborate to decrypt cards.
+
+3. **No Replay Attack Protection**: The protocol does not include nonce or timestamp mechanisms to prevent replay attacks.
+
+4. **Lack of Formal Security Proofs**: This implementation has not undergone formal cryptographic verification.
+
 For production deployment, additional work is needed for:
 - Threshold decryption (multi-party computation)
-- Full permutation proof verification
+- Full permutation proof verification (complete Bayer-Groth proof)
 - Network protocol layer
 - Comprehensive security review
+- Formal verification of cryptographic properties

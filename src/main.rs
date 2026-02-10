@@ -10,6 +10,8 @@ use std::fmt;
 
 const DECK_SIZE: usize = 52;
 const DEFAULT_NUM_PLAYERS: usize = 2;
+const DEFAULT_SHUFFLE_ROUNDS: usize = 2;
+const DEFAULT_DEALING_ROUNDS: usize = 5;
 const COMPRESSED_POINT_SIZE: usize = 33;
 
 #[derive(Debug, thiserror::Error)]
@@ -484,12 +486,7 @@ impl BayerGrothShuffle {
             sum_b += proof.b[i];
         }
 
-        let diff_c1_bytes = diff_c1.to_bytes();
-        let sum_a_bytes = sum_a.to_bytes();
-        let diff_c2_bytes = diff_c2.to_bytes();
-        let b_bytes = sum_b.to_bytes();
-
-        Ok(diff_c1_bytes == sum_a_bytes && diff_c2_bytes == b_bytes)
+        Ok(diff_c1 == sum_a && diff_c2 == sum_b)
     }
 }
 
@@ -699,7 +696,7 @@ fn print_setup_phase(num_players: usize, players: &[Player]) {
 fn run_shuffle_rounds(table: &mut MentalPokerTable, num_players: usize) {
     println!("=== 2. SHUFFLE PHASE\n");
 
-    for shuffle_round in 1..=2 {
+    for shuffle_round in 1..=DEFAULT_SHUFFLE_ROUNDS {
         println!("  Shuffle Round {shuffle_round}:");
 
         let player_id = (shuffle_round - 1) % num_players;
@@ -738,15 +735,15 @@ fn run_shuffle_rounds(table: &mut MentalPokerTable, num_players: usize) {
 fn run_dealing_rounds(table: &mut MentalPokerTable, player_ids: &[usize]) {
     println!("=== 3. DEALING PHASE\n");
 
-    for round in 1..=5 {
+    for round in 1..=DEFAULT_DEALING_ROUNDS {
         println!("  Dealing Round {round}:");
         for &player_id in player_ids {
             match table.deal_card(player_id) {
                 Ok(card) => {
-                    let c1_len = card.c1.to_bytes().len();
-                    let c2_len = card.c2.to_bytes().len();
-                    let c1_start = hex::encode(&card.c1.to_bytes()[..8.min(c1_len)]);
-                    let c2_end = hex::encode(&card.c2.to_bytes()[c2_len.saturating_sub(8)..]);
+                    let c1_bytes = card.c1.to_bytes();
+                    let c2_bytes = card.c2.to_bytes();
+                    let c1_start = hex::encode(&c1_bytes[..8.min(c1_bytes.len())]);
+                    let c2_end = hex::encode(&c2_bytes[c2_bytes.len().saturating_sub(8)..]);
                     println!("    Player {player_id} received: {c1_start}...{c2_end}");
                 }
                 Err(e) => println!("    Player {player_id} deal error: {e}"),
@@ -1094,5 +1091,89 @@ mod tests {
             result,
             Err(MentalPokerError::InvalidVectorLength { .. })
         ));
+    }
+
+    #[test]
+    fn test_encrypt_identity_point_fails() {
+        let elgamal = ElGamal::new();
+        let result = elgamal.encrypt(&ProjectivePoint::IDENTITY);
+        assert!(matches!(result, Err(MentalPokerError::InvalidMessagePoint)));
+    }
+
+    #[test]
+    fn test_decrypt_invalid_ciphertext_fails() {
+        let elgamal = ElGamal::new();
+        let invalid_ct = ElGamalCiphertext {
+            c1: ProjectivePoint::IDENTITY,
+            c2: ProjectivePoint::GENERATOR,
+        };
+        let result = elgamal.decrypt(&invalid_ct);
+        assert!(matches!(result, Err(MentalPokerError::InvalidCiphertext)));
+    }
+
+    #[test]
+    fn test_shuffle_single_element() {
+        let players: Vec<Player> = (0..2).map(Player::new).collect();
+        let shuffle = BayerGrothShuffle::new(&players);
+
+        let msg = ProjectivePoint::GENERATOR * Scalar::random(&mut OsRng);
+        let ciphertexts = vec![ElGamalCiphertext {
+            c1: ProjectivePoint::GENERATOR * Scalar::random(&mut OsRng),
+            c2: msg + (shuffle.public_key_sum * Scalar::random(&mut OsRng)),
+        }];
+
+        let (shuffled, proof) = shuffle
+            .shuffle(&ciphertexts, &mut OsRng)
+            .expect("Shuffle should succeed");
+        let result = BayerGrothShuffle::verify_shuffle(&ciphertexts, &shuffled, &proof);
+        assert!(matches!(result, Ok(true)));
+    }
+
+    #[test]
+    fn test_shuffle_mismatched_proof_length() {
+        let players: Vec<Player> = (0..2).map(Player::new).collect();
+        let shuffle = BayerGrothShuffle::new(&players);
+
+        let ciphertexts: Vec<ElGamalCiphertext> = (0..5)
+            .map(|_| {
+                let msg = ProjectivePoint::GENERATOR * Scalar::random(&mut OsRng);
+                ElGamalCiphertext {
+                    c1: ProjectivePoint::GENERATOR * Scalar::random(&mut OsRng),
+                    c2: msg + (shuffle.public_key_sum * Scalar::random(&mut OsRng)),
+                }
+            })
+            .collect();
+
+        let invalid_proof = ShuffleProof {
+            a: vec![ProjectivePoint::GENERATOR],
+            b: vec![ProjectivePoint::GENERATOR],
+            c: vec![Scalar::random(&mut OsRng)],
+            r: vec![Scalar::random(&mut OsRng)],
+        };
+
+        let result = BayerGrothShuffle::verify_shuffle(&ciphertexts, &ciphertexts, &invalid_proof);
+        assert!(result.is_err());
+        assert!(matches!(
+            result,
+            Err(MentalPokerError::InvalidCommitmentLength { .. })
+        ));
+    }
+
+    #[test]
+    fn test_hash_to_valid_scalar_finds_valid() {
+        let result = Deck::hash_to_valid_scalar(b"test_input");
+        assert!(result.is_ok());
+        let scalar = result.unwrap();
+        assert_ne!(scalar, Scalar::ZERO);
+    }
+
+    #[test]
+    fn test_card_points_are_distinct() {
+        let deck = Deck::new().expect("Failed to create deck");
+        let mut seen_points: HashSet<[u8; 33]> = HashSet::new();
+        for card in &deck.cards {
+            let bytes: [u8; 33] = card.to_bytes().into();
+            assert!(seen_points.insert(bytes), "Duplicate card point detected");
+        }
     }
 }
