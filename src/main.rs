@@ -419,7 +419,7 @@ impl BayerGrothShuffle {
 
         for &source_index in &inverse_perm {
             let r_i: Scalar = Scalar::random(&mut *rng);
-            let c_i = alpha[source_index] + e * Scalar::from(source_index as u64) + r_i;
+            let c_i = alpha[source_index] + e * Scalar::from(source_index as u32) + r_i;
             c.push(c_i);
             r.push(r_i);
         }
@@ -534,13 +534,6 @@ impl MentalPokerTable {
     pub fn new(num_players: usize) -> Result<Self, MentalPokerError> {
         let players: Vec<Player> = (0..num_players).map(Player::new).collect();
 
-        let mut seen_ids = std::collections::HashSet::new();
-        for player in &players {
-            if !seen_ids.insert(player.id) {
-                return Err(MentalPokerError::DuplicatePlayerIdInitialization);
-            }
-        }
-
         let deck = Deck::new()?;
         let dealer = ElGamal::new();
         let encrypted_deck = deck.encrypt_deck(&dealer)?;
@@ -590,7 +583,7 @@ impl MentalPokerTable {
         let input_deck: Vec<ElGamalCiphertext> = if self.shuffled_deck.is_empty() {
             self.encrypted_deck.clone()
         } else {
-            self.shuffled_deck.iter().cloned().collect()
+            self.shuffled_deck.make_contiguous().to_vec()
         };
 
         let shuffle = BayerGrothShuffle::with_public_key_sum(self.public_key_sum);
@@ -612,7 +605,7 @@ impl MentalPokerTable {
     /// Returns `MentalPokerError::InvalidVectorLength` or other errors from `verify_shuffle`.
     pub fn verify_last_shuffle(&self) -> Result<bool, MentalPokerError> {
         if self.shuffle_proofs.is_empty() {
-            return Ok(true);
+            return Err(MentalPokerError::ShuffleVerificationFailed);
         }
 
         let proof = self
@@ -706,14 +699,10 @@ fn print_setup_phase(num_players: usize, players: &[Player]) {
         println!("  Player {} public key: {}...{}", player.id, start, end);
     }
 
-    let deck = Deck::new().expect("Failed to create deck");
     println!(
         "\n  Deck created with {} cards (each mapped to curve point)",
-        deck.cards.len()
+        DECK_SIZE
     );
-
-    let dealer = ElGamal::new();
-    let _encrypted_deck = deck.encrypt_deck(&dealer).expect("Failed to encrypt deck");
     println!("  Dealer encrypted all cards with ElGamal\n");
 }
 
@@ -1095,8 +1084,11 @@ mod tests {
     fn test_empty_shuffle_verification() {
         let table = MentalPokerTable::new(2).expect("Failed to create table");
         let result = table.verify_last_shuffle();
-        assert!(result.is_ok(), "Empty shuffle list should return Ok(true)");
-        assert!(result.unwrap(), "Empty shuffle list should return true");
+        assert!(result.is_err(), "Empty shuffle list should return error");
+        assert!(matches!(
+            result,
+            Err(MentalPokerError::ShuffleVerificationFailed)
+        ));
     }
 
     #[test]
