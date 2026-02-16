@@ -24,7 +24,8 @@ const _: () = assert!(DECK_SIZE < u32::MAX as usize);
 type Commitments = Vec<ProjectivePoint>;
 type Responses = Vec<Scalar>;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum MentalPokerError {
     #[error("Deck initialization failed after maximum retries")]
     DeckInitializationFailed,
@@ -265,6 +266,7 @@ pub fn compute_public_key_sum(players: &[Player]) -> ProjectivePoint {
 ///
 /// Cards are mapped to curve points using SHA-256 hash-to-point derivation
 /// to ensure uniform distribution on the curve.
+#[derive(Debug)]
 pub struct Deck {
     cards: Vec<ProjectivePoint>,
 }
@@ -641,6 +643,12 @@ impl MentalPokerTable {
         &self.encrypted_deck
     }
 
+    #[must_use]
+    #[inline]
+    pub fn dealer(&self) -> &ElGamal {
+        &self.dealer
+    }
+
     /// Shuffles the deck using the Bayer-Groth shuffle protocol.
     ///
     /// Takes the current deck state, applies a random permutation with rerandomization,
@@ -689,10 +697,6 @@ impl MentalPokerTable {
     /// Returns `MentalPokerError::ShuffleVerificationFailed` if no proof exists.
     /// Returns `MentalPokerError::InvalidVectorLength` or other errors from `verify_shuffle`.
     pub fn verify_last_shuffle(&self) -> Result<bool, MentalPokerError> {
-        if self.shuffle_proofs.is_empty() {
-            return Err(MentalPokerError::ShuffleVerificationFailed);
-        }
-
         let proof = self
             .shuffle_proofs
             .last()
