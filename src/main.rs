@@ -19,6 +19,8 @@ const DEFAULT_DEALING_ROUNDS: usize = 5;
 /// Size of compressed secp256k1 point in bytes
 const COMPRESSED_POINT_SIZE: usize = 33;
 
+const _: () = assert!(DECK_SIZE < u32::MAX as usize);
+
 type Commitments = Vec<ProjectivePoint>;
 type Responses = Vec<Scalar>;
 
@@ -204,7 +206,7 @@ impl ShuffleProof {
 ///
 /// Each player has a unique ID and their own `ElGamal` key pair
 /// for participating in distributed deck shuffling.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Player {
     id: usize,
     keypair: ElGamalKeyPair,
@@ -747,6 +749,11 @@ impl MentalPokerTable {
     pub fn get_player_hand(&self, player_id: usize) -> Option<&[ElGamalCiphertext]> {
         self.player_hands.get(&player_id).map(Vec::as_slice)
     }
+
+    #[must_use]
+    pub fn total_cards_dealt(&self) -> usize {
+        self.player_hands.values().map(Vec::len).sum()
+    }
 }
 
 fn run_mental_poker_simulation() -> Result<(), MentalPokerError> {
@@ -872,7 +879,7 @@ fn run_security_verification(table: &MentalPokerTable) {
 
     let final_deck_size = table.shuffled_deck_size();
     let original_size = table.encrypted_deck().len();
-    let dealt_cards: usize = table.player_hands.values().map(Vec::len).sum();
+    let dealt_cards = table.total_cards_dealt();
 
     println!("  Original deck size: {original_size}");
     println!("  Cards dealt: {dealt_cards}");
