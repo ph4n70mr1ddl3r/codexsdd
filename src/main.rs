@@ -219,7 +219,7 @@ impl Player {
     ///
     /// # Returns
     ///
-    /// A new player instance with a generated ElGamal key pair
+    /// A new player instance with a generated `ElGamal` key pair
     #[must_use]
     pub fn new(id: usize) -> Self {
         Self {
@@ -256,7 +256,7 @@ impl Player {
 /// The sum of all player public keys as a single curve point
 #[must_use]
 pub fn compute_public_key_sum(players: &[Player]) -> ProjectivePoint {
-    players.iter().map(|p| p.public_key()).sum()
+    players.iter().map(Player::public_key).sum()
 }
 
 /// A deck of 52 playing cards, each mapped to a point on the elliptic curve.
@@ -422,6 +422,10 @@ impl BayerGrothShuffle {
     ///
     /// Returns `MentalPokerError::InvalidVectorLength` if ciphertexts and commitments have mismatched lengths.
     /// Returns `MentalPokerError::ScalarConversionFailed` if challenge hash cannot be converted to scalar.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the deck size exceeds `u32::MAX` (extremely unlikely with 52 cards).
     pub fn shuffle<R: rand::Rng + rand::CryptoRng>(
         &self,
         ciphertexts: &[ElGamalCiphertext],
@@ -478,7 +482,9 @@ impl BayerGrothShuffle {
 
         for &source_index in &inverse_perm {
             let r_i: Scalar = Scalar::random(&mut *rng);
-            let c_i = alpha[source_index] + e * Scalar::from(source_index as u32) + r_i;
+            let c_i = alpha[source_index]
+                + e * Scalar::from(u32::try_from(source_index).expect("index within u32 bounds"))
+                + r_i;
             c.push(c_i);
             r.push(r_i);
         }
@@ -658,7 +664,7 @@ impl MentalPokerTable {
         }
 
         let input_deck: Vec<ElGamalCiphertext> = if self.shuffled_deck.is_empty() {
-            self.encrypted_deck.to_vec()
+            self.encrypted_deck.clone()
         } else {
             self.shuffled_deck.iter().copied().collect()
         };
@@ -754,7 +760,7 @@ fn run_mental_poker_simulation() -> Result<(), MentalPokerError> {
     print_setup_phase(num_players, table.players());
     run_shuffle_rounds(&mut table, num_players);
 
-    let player_ids: Vec<usize> = table.players().iter().map(|p| p.id()).collect();
+    let player_ids: Vec<usize> = table.players().iter().map(Player::id).collect();
     run_dealing_rounds(&mut table, &player_ids);
     run_decryption_phase(&table, &player_ids);
     run_security_verification(&table);
@@ -781,10 +787,7 @@ fn print_setup_phase(num_players: usize, players: &[Player]) {
         );
     }
 
-    println!(
-        "\n  Deck created with {} cards (each mapped to curve point)",
-        DECK_SIZE
-    );
+    println!("\n  Deck created with {DECK_SIZE} cards (each mapped to curve point)");
     println!("  Dealer encrypted all cards with ElGamal\n");
 }
 
@@ -1074,7 +1077,7 @@ mod tests {
             .expect("verify should not error");
         assert!(verified, "Shuffle should be verifiable");
 
-        let player_ids: Vec<usize> = table.players().iter().map(|p| p.id()).collect();
+        let player_ids: Vec<usize> = table.players().iter().map(Player::id).collect();
         for _ in 0..5 {
             for &player_id in &player_ids {
                 assert!(table.deal_card(player_id).is_ok());
