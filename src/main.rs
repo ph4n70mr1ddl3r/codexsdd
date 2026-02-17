@@ -47,8 +47,6 @@ pub enum MentalPokerError {
     InvalidMessagePoint,
     #[error("Invalid ciphertext: contains invalid curve point")]
     InvalidCiphertext,
-    #[error("Shuffle verification is incomplete: only checks aggregate properties, not full permutation proof")]
-    IncompleteShuffleVerification,
 }
 
 /// `ElGamal` ciphertext pair (c1, c2) for elliptic curve encryption.
@@ -300,6 +298,10 @@ impl Deck {
     }
 
     fn hash_to_valid_scalar(input: &[u8]) -> Result<Scalar, MentalPokerError> {
+        Self::hash_to_valid_scalar_inner(input)
+    }
+
+    fn hash_to_valid_scalar_inner(input: &[u8]) -> Result<Scalar, MentalPokerError> {
         const MAX_RETRIES: u32 = 256;
 
         for retry in 0..MAX_RETRIES {
@@ -484,11 +486,12 @@ impl BayerGrothShuffle {
             inverse_perm[permutation[i]] = i;
         }
 
-        for (i, &source_index) in inverse_perm.iter().enumerate() {
+        for source_index in &inverse_perm[..n] {
             let r_i: Scalar = Scalar::random(&mut *rng);
-            let c_i = alpha[source_index]
+            let c_i = alpha[*source_index]
                 + e * Scalar::from(
-                    u32::try_from(i).map_err(|_| MentalPokerError::ScalarConversionFailed)?,
+                    u32::try_from(*source_index)
+                        .map_err(|_| MentalPokerError::ScalarConversionFailed)?,
                 )
                 + r_i;
             c.push(c_i);
@@ -520,11 +523,12 @@ impl BayerGrothShuffle {
     ///
     /// Returns `MentalPokerError::InvalidVectorLength` if input vectors have mismatched lengths.
     /// Returns `MentalPokerError::InvalidCommitmentLength` if proof dimensions are incorrect.
+    /// Returns `MentalPokerError::ShuffleVerificationFailed` if the proof is invalid.
     pub fn verify_shuffle(
         original: &[ElGamalCiphertext],
         shuffled: &[ElGamalCiphertext],
         proof: &ShuffleProof,
-    ) -> Result<bool, MentalPokerError> {
+    ) -> Result<(), MentalPokerError> {
         let n = original.len();
 
         if n == 0 {
@@ -556,7 +560,11 @@ impl BayerGrothShuffle {
         let sum_a: ProjectivePoint = proof.commitments_a().iter().sum();
         let sum_b: ProjectivePoint = proof.commitments_b().iter().sum();
 
-        Ok(diff_c1 == sum_a && diff_c2 == sum_b)
+        if diff_c1 == sum_a && diff_c2 == sum_b {
+            Ok(())
+        } else {
+            Err(MentalPokerError::ShuffleVerificationFailed)
+        }
     }
 
     fn sum_ciphertexts(ciphertexts: &[ElGamalCiphertext]) -> (ProjectivePoint, ProjectivePoint) {
@@ -697,9 +705,9 @@ impl MentalPokerTable {
     ///
     /// # Errors
     ///
-    /// Returns `MentalPokerError::ShuffleVerificationFailed` if no proof exists.
+    /// Returns `MentalPokerError::ShuffleVerificationFailed` if no proof exists or verification fails.
     /// Returns `MentalPokerError::InvalidVectorLength` or other errors from `verify_shuffle`.
-    pub fn verify_last_shuffle(&self) -> Result<bool, MentalPokerError> {
+    pub fn verify_last_shuffle(&self) -> Result<(), MentalPokerError> {
         let proof = self
             .shuffle_proofs
             .last()
@@ -709,7 +717,8 @@ impl MentalPokerTable {
             &self.last_shuffle_input,
             &self.last_shuffle_output,
             proof,
-        )
+        )?;
+        Ok(())
     }
 
     /// Deals the top card from the shuffled deck to a player.
@@ -832,14 +841,11 @@ fn run_shuffle_rounds(table: &mut MentalPokerTable, num_players: usize) {
             );
 
             match table.verify_last_shuffle() {
-                Ok(is_valid) => {
-                    println!(
-                        "    Proof verification: {}\n",
-                        if is_valid { "PASSED" } else { "FAILED" }
-                    );
+                Ok(()) => {
+                    println!("    Proof verification: PASSED\n");
                 }
                 Err(e) => {
-                    println!("    Proof verification: ERROR - {e:?}\n");
+                    println!("    Proof verification: FAILED - {e:?}\n");
                 }
             }
         }
@@ -905,7 +911,7 @@ fn run_security_verification(table: &MentalPokerTable) {
     );
 
     let shuffle_preserves_count = dealt_cards + final_deck_size == original_size;
-    let last_shuffle_valid = table.verify_last_shuffle().unwrap_or(false);
+    let last_shuffle_valid = table.verify_last_shuffle().is_ok();
     let shuffle_preserves_all = shuffle_preserves_count && last_shuffle_valid;
     println!(
         "  Shuffle preserves all cards: {}",
@@ -952,11 +958,8 @@ fn run_shuffle_verification_test() {
     );
 
     match BayerGrothShuffle::verify_shuffle(&test_ciphertexts, &shuffled, &proof) {
-        Ok(is_valid) => println!(
-            "  Shuffle verification: {}\n",
-            if is_valid { "PASSED" } else { "FAILED" }
-        ),
-        Err(e) => println!("  Shuffle verification: ERROR - {e:?}\n"),
+        Ok(()) => println!("  Shuffle verification: PASSED\n"),
+        Err(e) => println!("  Shuffle verification: FAILED - {e:?}\n"),
     }
 }
 
@@ -1080,7 +1083,7 @@ mod tests {
 
         let result = BayerGrothShuffle::verify_shuffle(&ciphertexts, &shuffled, &proof);
         assert!(
-            matches!(result, Ok(true)),
+            result.is_ok(),
             "Shuffle verification should pass for valid proof, got: {result:?}"
         );
     }
@@ -1096,10 +1099,9 @@ mod tests {
         assert_eq!(table.shuffled_deck_size(), DECK_SIZE);
         assert_eq!(table.shuffle_proofs_count(), 1);
 
-        let verified = table
+        table
             .verify_last_shuffle()
             .expect("verify should not error");
-        assert!(verified, "Shuffle should be verifiable");
 
         let player_ids: Vec<usize> = table.players().iter().map(Player::id).collect();
         for _ in 0..5 {
@@ -1141,10 +1143,9 @@ mod tests {
         assert_eq!(table.players.len(), 1);
 
         assert!(table.shuffle_deck(0).is_ok());
-        let verified = table
+        table
             .verify_last_shuffle()
             .expect("Verify should not error");
-        assert!(verified, "Shuffle should be verifiable with single player");
     }
 
     #[test]
@@ -1192,10 +1193,9 @@ mod tests {
 
         for i in 0..3 {
             table.shuffle_deck(i % 2).expect("Shuffle should succeed");
-            let verified = table
+            table
                 .verify_last_shuffle()
                 .expect("Verify should not error");
-            assert!(verified, "Shuffle {i} should be verifiable");
         }
     }
 
@@ -1261,7 +1261,7 @@ mod tests {
             .shuffle(&ciphertexts, &mut OsRng)
             .expect("Shuffle should succeed");
         let result = BayerGrothShuffle::verify_shuffle(&ciphertexts, &shuffled, &proof);
-        assert!(matches!(result, Ok(true)));
+        assert!(result.is_ok());
     }
 
     #[test]
