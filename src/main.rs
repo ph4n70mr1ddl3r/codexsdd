@@ -487,7 +487,7 @@ impl BayerGrothShuffle {
         for (i, &source_index) in inverse_perm.iter().enumerate() {
             let r_i: Scalar = Scalar::random(&mut *rng);
             let c_i = alpha[source_index]
-                + e * Scalar::from(u32::try_from(i).unwrap_or_else(|_| unreachable!()))
+                + e * Scalar::from(u32::try_from(i).expect("deck size exceeds u32::MAX"))
                 + r_i;
             c.push(c_i);
             r.push(r_i);
@@ -685,9 +685,8 @@ impl MentalPokerTable {
         let (shuffled, proof) = shuffle.shuffle(&input_deck, &mut OsRng)?;
 
         self.last_shuffle_input = input_deck;
-        let shuffled_vec = shuffled;
-        self.last_shuffle_output = shuffled_vec.clone();
-        self.shuffled_deck = VecDeque::from(shuffled_vec);
+        self.last_shuffle_output = shuffled.clone();
+        self.shuffled_deck = VecDeque::from(shuffled);
         self.shuffle_proofs.push(proof);
         self.current_shuffle += 1;
 
