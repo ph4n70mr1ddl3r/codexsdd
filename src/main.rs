@@ -299,10 +299,7 @@ fn build_hash_input(
         });
     }
 
-    let total_size = n
-        * (COMPRESSED_POINT_SIZE * 4)
-            .saturating_mul(n)
-            .min(usize::MAX / 4);
+    let total_size = n * COMPRESSED_POINT_SIZE * 4;
     let mut hash_input = Vec::with_capacity(total_size);
 
     for ct in ciphertexts {
@@ -490,7 +487,7 @@ impl BayerGrothShuffle {
         for (i, &source_index) in inverse_perm.iter().enumerate() {
             let r_i: Scalar = Scalar::random(&mut *rng);
             let c_i = alpha[source_index]
-                + e * Scalar::from(u32::try_from(i).expect("index within u32 bounds"))
+                + e * Scalar::from(u32::try_from(i).unwrap_or_else(|_| unreachable!()))
                 + r_i;
             c.push(c_i);
             r.push(r_i);
@@ -580,6 +577,7 @@ pub struct MentalPokerTable {
     shuffle_proofs: Vec<ShuffleProof>,
     current_shuffle: usize,
     last_shuffle_input: Vec<ElGamalCiphertext>,
+    last_shuffle_output: Vec<ElGamalCiphertext>,
     player_hands: HashMap<usize, Vec<ElGamalCiphertext>>,
     public_key_sum: ProjectivePoint,
 }
@@ -613,6 +611,7 @@ impl MentalPokerTable {
             shuffle_proofs: Vec::new(),
             current_shuffle: 0,
             last_shuffle_input: Vec::new(),
+            last_shuffle_output: Vec::new(),
             player_hands,
             public_key_sum,
         })
@@ -686,7 +685,9 @@ impl MentalPokerTable {
         let (shuffled, proof) = shuffle.shuffle(&input_deck, &mut OsRng)?;
 
         self.last_shuffle_input = input_deck;
-        self.shuffled_deck = VecDeque::from(shuffled);
+        let shuffled_vec = shuffled;
+        self.last_shuffle_output = shuffled_vec.clone();
+        self.shuffled_deck = VecDeque::from(shuffled_vec);
         self.shuffle_proofs.push(proof);
         self.current_shuffle += 1;
 
@@ -705,8 +706,11 @@ impl MentalPokerTable {
             .last()
             .ok_or(MentalPokerError::ShuffleVerificationFailed)?;
 
-        let shuffled_vec: Vec<ElGamalCiphertext> = self.shuffled_deck.iter().copied().collect();
-        BayerGrothShuffle::verify_shuffle(&self.last_shuffle_input, &shuffled_vec, proof)
+        BayerGrothShuffle::verify_shuffle(
+            &self.last_shuffle_input,
+            &self.last_shuffle_output,
+            proof,
+        )
     }
 
     /// Deals the top card from the shuffled deck to a player.
@@ -758,6 +762,7 @@ impl MentalPokerTable {
     }
 
     #[must_use]
+    #[inline]
     pub fn total_cards_dealt(&self) -> usize {
         self.player_hands.values().map(Vec::len).sum()
     }
