@@ -47,6 +47,8 @@ pub enum MentalPokerError {
     InvalidMessagePoint,
     #[error("Invalid ciphertext: contains invalid curve point")]
     InvalidCiphertext,
+    #[error("Shuffle verification is incomplete: only checks aggregate properties, not full permutation proof")]
+    IncompleteShuffleVerification,
 }
 
 /// `ElGamal` ciphertext pair (c1, c2) for elliptic curve encryption.
@@ -213,9 +215,6 @@ pub struct Player {
 
 impl Player {
     /// Creates a new player with the given ID and generates a fresh key pair.
-    ///
-    /// # Arguments
-    /// Creates a new player with the given ID and a fresh ElGamal key pair.
     ///
     /// # Arguments
     ///
@@ -578,7 +577,6 @@ pub struct MentalPokerTable {
     encrypted_deck: Vec<ElGamalCiphertext>,
     shuffled_deck: VecDeque<ElGamalCiphertext>,
     shuffle_proofs: Vec<ShuffleProof>,
-    current_shuffle: usize,
     last_shuffle_input: Vec<ElGamalCiphertext>,
     last_shuffle_output: Vec<ElGamalCiphertext>,
     player_hands: HashMap<usize, Vec<ElGamalCiphertext>>,
@@ -612,7 +610,6 @@ impl MentalPokerTable {
             encrypted_deck,
             shuffled_deck: VecDeque::new(),
             shuffle_proofs: Vec::new(),
-            current_shuffle: 0,
             last_shuffle_input: Vec::new(),
             last_shuffle_output: Vec::new(),
             player_hands,
@@ -692,7 +689,6 @@ impl MentalPokerTable {
         self.last_shuffle_output = shuffled.clone();
         self.shuffled_deck = VecDeque::from(shuffled);
         self.shuffle_proofs.push(proof);
-        self.current_shuffle += 1;
 
         Ok(())
     }
