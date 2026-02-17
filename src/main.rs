@@ -196,7 +196,7 @@ impl ShuffleProof {
     /// Returns the random values used in responses
     #[must_use]
     #[inline]
-    pub fn responses_r(&self) -> &[Scalar] {
+    pub fn random_values(&self) -> &[Scalar] {
         &self.r
     }
 }
@@ -215,12 +215,11 @@ impl Player {
     /// Creates a new player with the given ID and generates a fresh key pair.
     ///
     /// # Arguments
+    /// Creates a new player with the given ID and a fresh ElGamal key pair.
+    ///
+    /// # Arguments
     ///
     /// * `id` - Unique identifier for this player
-    ///
-    /// # Returns
-    ///
-    /// A new player instance with a generated `ElGamal` key pair
     #[must_use]
     pub fn new(id: usize) -> Self {
         Self {
@@ -489,7 +488,9 @@ impl BayerGrothShuffle {
         for (i, &source_index) in inverse_perm.iter().enumerate() {
             let r_i: Scalar = Scalar::random(&mut *rng);
             let c_i = alpha[source_index]
-                + e * Scalar::from(u32::try_from(i).expect("deck size exceeds u32::MAX"))
+                + e * Scalar::from(
+                    u32::try_from(i).map_err(|_| MentalPokerError::ScalarConversionFailed)?,
+                )
                 + r_i;
             c.push(c_i);
             r.push(r_i);
@@ -647,6 +648,7 @@ impl MentalPokerTable {
         &self.encrypted_deck
     }
 
+    /// Returns a reference to the dealer's ElGamal encryption instance
     #[must_use]
     #[inline]
     pub fn dealer(&self) -> &ElGamal {
@@ -821,9 +823,10 @@ fn run_shuffle_rounds(table: &mut MentalPokerTable, num_players: usize) {
         println!("    Shuffler: Player {player_id}");
 
         let before_count = table.shuffled_deck.len();
-        table
-            .shuffle_deck(player_id)
-            .expect("Shuffle should succeed");
+        if let Err(e) = table.shuffle_deck(player_id) {
+            println!("    Shuffle ERROR: {e}\n");
+            continue;
+        }
         let after_count = table.shuffled_deck.len();
 
         println!("    Deck size: {before_count} -> {after_count}");
@@ -832,7 +835,7 @@ fn run_shuffle_rounds(table: &mut MentalPokerTable, num_players: usize) {
             println!(
                 "    Proof size: {} commitments, {} responses",
                 proof.commitments_a().len() + proof.commitments_b().len(),
-                proof.responses_r().len()
+                proof.random_values().len()
             );
 
             match table.verify_last_shuffle() {
@@ -877,11 +880,15 @@ fn run_decryption_phase(table: &MentalPokerTable, player_ids: &[usize]) {
         if let Some(hand) = table.get_player_hand(*player_id) {
             println!("  Player {player_id}'s hand ({} cards):", hand.len());
             for (i, card) in hand.iter().enumerate() {
-                let decrypted = table.dealer.decrypt(card).expect("Decrypt should succeed");
-                let card_bytes = decrypted.to_bytes();
-                let prefix = format_hex_prefix(&card_bytes, 8);
-                let suffix = format_hex_suffix(&card_bytes, 8);
-                println!("    Card {}: {}...{}", i + 1, prefix, suffix);
+                match table.dealer.decrypt(card) {
+                    Ok(decrypted) => {
+                        let card_bytes = decrypted.to_bytes();
+                        let prefix = format_hex_prefix(&card_bytes, 8);
+                        let suffix = format_hex_suffix(&card_bytes, 8);
+                        println!("    Card {}: {}...{}", i + 1, prefix, suffix);
+                    }
+                    Err(e) => println!("    Card {}: DECRYPTION ERROR - {}", i + 1, e),
+                }
             }
         }
     }
@@ -938,9 +945,13 @@ fn run_shuffle_verification_test() {
         "  Testing shuffle with {} ciphertexts...",
         test_ciphertexts.len()
     );
-    let (shuffled, proof) = shuffle
-        .shuffle(&test_ciphertexts, &mut OsRng)
-        .expect("Shuffle should not fail in verification test");
+    let (shuffled, proof) = match shuffle.shuffle(&test_ciphertexts, &mut OsRng) {
+        Ok(result) => result,
+        Err(e) => {
+            println!("  Shuffle ERROR: {e}\n");
+            return;
+        }
+    };
     println!(
         "  Generated proof with {} A-points, {} B-points",
         proof.commitments_a().len(),
