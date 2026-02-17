@@ -19,8 +19,6 @@ const DEFAULT_DEALING_ROUNDS: usize = 5;
 /// Size of compressed secp256k1 point in bytes
 const COMPRESSED_POINT_SIZE: usize = 33;
 
-const _: () = assert!(DECK_SIZE < u32::MAX as usize);
-
 type Commitments = Vec<ProjectivePoint>;
 type Responses = Vec<Scalar>;
 
@@ -271,7 +269,63 @@ pub struct Deck {
     cards: Vec<ProjectivePoint>,
 }
 
+impl Default for Deck {
+    fn default() -> Self {
+        Self::new().expect("Default deck initialization should not fail")
+    }
+}
+
 impl Deck {
+    /// Creates a new deck of 52 cards, each mapped to a unique curve point.
+    ///
+    /// Uses SHA-256 to derive scalars from card identifiers, then multiplies
+    /// by the generator to obtain points on secp256k1.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MentalPokerError::DeckInitializationFailed` if unable to generate valid scalars.
+    pub fn new() -> Result<Self, MentalPokerError> {
+        Self::new_full()
+    }
+
+    fn new_full() -> Result<Self, MentalPokerError> {
+        let mut cards = Vec::with_capacity(DECK_SIZE);
+
+        for i in 0..DECK_SIZE {
+            let card_data = format!("CARD_{i}");
+            let scalar = Self::hash_to_valid_scalar(card_data.as_bytes())?;
+
+            cards.push(ProjectivePoint::GENERATOR * scalar);
+        }
+
+        Ok(Self { cards })
+    }
+
+    fn hash_to_valid_scalar(input: &[u8]) -> Result<Scalar, MentalPokerError> {
+        const MAX_RETRIES: u32 = 256;
+
+        for retry in 0..MAX_RETRIES {
+            let mut hash = [0u8; 32];
+            let mut hasher = Sha256::new();
+            if retry == 0 {
+                hasher.update(input);
+            } else {
+                let mut extended = input.to_vec();
+                extended.extend_from_slice(&retry.to_le_bytes());
+                hasher.update(&extended);
+            }
+            hash.copy_from_slice(&hasher.finalize());
+
+            let scalar_option = Scalar::from_repr(hash.into()).into_option();
+            if let Some(scalar) = scalar_option {
+                if scalar != Scalar::ZERO {
+                    return Ok(scalar);
+                }
+            }
+        }
+        Err(MentalPokerError::DeckInitializationFailed)
+    }
+
     /// Returns a reference to the cards in the deck
     #[must_use]
     #[inline]
@@ -317,52 +371,6 @@ fn build_hash_input(
 }
 
 impl Deck {
-    /// Creates a new deck of 52 cards, each mapped to a unique curve point.
-    ///
-    /// Uses SHA-256 to derive scalars from card identifiers, then multiplies
-    /// by the generator to obtain points on secp256k1.
-    ///
-    /// # Errors
-    ///
-    /// Returns `MentalPokerError::DeckInitializationFailed` if unable to generate valid scalars.
-    pub fn new() -> Result<Self, MentalPokerError> {
-        let mut cards = Vec::with_capacity(DECK_SIZE);
-
-        for i in 0..DECK_SIZE {
-            let card_data = format!("CARD_{i}");
-            let scalar = Self::hash_to_valid_scalar(card_data.as_bytes())?;
-
-            cards.push(ProjectivePoint::GENERATOR * scalar);
-        }
-
-        Ok(Self { cards })
-    }
-
-    fn hash_to_valid_scalar(input: &[u8]) -> Result<Scalar, MentalPokerError> {
-        const MAX_RETRIES: u32 = 256;
-
-        for retry in 0..MAX_RETRIES {
-            let mut hash = [0u8; 32];
-            let mut hasher = Sha256::new();
-            if retry == 0 {
-                hasher.update(input);
-            } else {
-                let mut extended = input.to_vec();
-                extended.extend_from_slice(&retry.to_le_bytes());
-                hasher.update(&extended);
-            }
-            hash.copy_from_slice(&hasher.finalize());
-
-            let scalar_option = Scalar::from_repr(hash.into()).into_option();
-            if let Some(scalar) = scalar_option {
-                if scalar != Scalar::ZERO {
-                    return Ok(scalar);
-                }
-            }
-        }
-        Err(MentalPokerError::DeckInitializationFailed)
-    }
-
     /// Encrypts all cards in the deck using the provided `ElGamal` encryptor.
     ///
     /// # Errors
