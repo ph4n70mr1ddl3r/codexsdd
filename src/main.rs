@@ -733,9 +733,6 @@ impl MentalPokerTable {
                 self.players.len(),
             ));
         }
-        if self.shuffled_deck.is_empty() {
-            return Err(MentalPokerError::DeckEmpty);
-        }
         let card = self
             .shuffled_deck
             .pop_front()
