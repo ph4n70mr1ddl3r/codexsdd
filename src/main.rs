@@ -316,12 +316,6 @@ fn build_hash_input(
     Ok(hash_input)
 }
 
-impl Default for Deck {
-    fn default() -> Self {
-        Self::new().expect("Failed to initialize default deck")
-    }
-}
-
 impl Deck {
     /// Creates a new deck of 52 cards, each mapped to a unique curve point.
     ///
