@@ -299,7 +299,10 @@ fn build_hash_input(
         });
     }
 
-    let total_size = 4 * n * COMPRESSED_POINT_SIZE;
+    let total_size = n
+        * (COMPRESSED_POINT_SIZE * 4)
+            .saturating_mul(n)
+            .min(usize::MAX / 4);
     let mut hash_input = Vec::with_capacity(total_size);
 
     for ct in ciphertexts {
@@ -484,10 +487,10 @@ impl BayerGrothShuffle {
             inverse_perm[permutation[i]] = i;
         }
 
-        for &source_index in &inverse_perm {
+        for (i, &source_index) in inverse_perm.iter().enumerate() {
             let r_i: Scalar = Scalar::random(&mut *rng);
             let c_i = alpha[source_index]
-                + e * Scalar::from(u32::try_from(source_index).expect("index within u32 bounds"))
+                + e * Scalar::from(u32::try_from(i).expect("index within u32 bounds"))
                 + r_i;
             c.push(c_i);
             r.push(r_i);
