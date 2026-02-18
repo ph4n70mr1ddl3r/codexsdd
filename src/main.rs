@@ -215,7 +215,7 @@ impl ElGamal {
 ///
 /// This proof demonstrates that a permutation was applied to ciphertexts
 /// without revealing the permutation itself.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShuffleProof {
     /// Commitments to alpha values (`A_i` = `alpha_i` * G)
     a: Commitments,
@@ -700,6 +700,20 @@ impl MentalPokerTable {
         self.shuffle_proofs.len()
     }
 
+    /// Returns true if the shuffled deck is empty
+    #[must_use]
+    #[inline]
+    pub fn is_deck_empty(&self) -> bool {
+        self.shuffled_deck.is_empty()
+    }
+
+    /// Returns true if at least one shuffle has been performed
+    #[must_use]
+    #[inline]
+    pub fn has_shuffles(&self) -> bool {
+        !self.shuffle_proofs.is_empty()
+    }
+
     /// Returns a reference to the encrypted deck
     #[must_use]
     #[inline]
@@ -1161,10 +1175,13 @@ mod tests {
     fn test_mental_poker_table_lifecycle() {
         let mut table = MentalPokerTable::new(3).expect("Failed to create table");
 
-        assert_eq!(table.shuffled_deck_size(), 0);
-        assert_eq!(table.shuffle_proofs.len(), 0);
+        assert!(table.is_deck_empty());
+        assert!(!table.has_shuffles());
+        assert_eq!(table.shuffle_proofs_count(), 0);
 
         assert!(table.shuffle_deck(0).is_ok());
+        assert!(!table.is_deck_empty());
+        assert!(table.has_shuffles());
         assert_eq!(table.shuffled_deck_size(), DECK_SIZE);
         assert_eq!(table.shuffle_proofs_count(), 1);
 
