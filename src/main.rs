@@ -388,6 +388,7 @@ impl Deck {
 /// The Bayer-Groth shuffle is a zero-knowledge proof that a permutation
 /// was applied to a sequence of `ElGamal` ciphertexts. This allows multiple
 /// players to shuffle a deck without any single player learning the order.
+#[derive(Debug, Clone)]
 pub struct BayerGrothShuffle {
     public_key_sum: ProjectivePoint,
 }
@@ -654,6 +655,20 @@ impl MentalPokerTable {
     #[inline]
     pub fn dealer(&self) -> &ElGamal {
         &self.dealer
+    }
+
+    /// Returns the combined public key sum of all players
+    #[must_use]
+    #[inline]
+    pub fn public_key_sum(&self) -> ProjectivePoint {
+        self.public_key_sum
+    }
+
+    /// Returns a reference to all shuffle proofs
+    #[must_use]
+    #[inline]
+    pub fn shuffle_proofs(&self) -> &[ShuffleProof] {
+        &self.shuffle_proofs
     }
 
     /// Shuffles the deck using the Bayer-Groth shuffle protocol.
@@ -1208,8 +1223,6 @@ mod tests {
 
     #[test]
     fn test_verify_shuffle_empty_input() {
-        let players: Vec<Player> = (0..2).map(Player::new).collect();
-        let _shuffle = BayerGrothShuffle::new(&players);
         let proof = ShuffleProof {
             a: Vec::new(),
             b: Vec::new(),
