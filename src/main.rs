@@ -22,7 +22,7 @@ const COMPRESSED_POINT_SIZE: usize = 33;
 type Commitments = Vec<ProjectivePoint>;
 type Responses = Vec<Scalar>;
 
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MentalPokerError {
     #[error("Deck initialization failed after maximum retries")]
@@ -1136,7 +1136,7 @@ mod tests {
     #[test]
     fn test_single_player_table() {
         let mut table = MentalPokerTable::new(1).expect("Failed to create table");
-        assert_eq!(table.players.len(), 1);
+        assert_eq!(table.players().len(), 1);
 
         assert!(table.shuffle_deck(0).is_ok());
         table
