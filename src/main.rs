@@ -298,10 +298,6 @@ impl Deck {
     }
 
     fn hash_to_valid_scalar(input: &[u8]) -> Result<Scalar, MentalPokerError> {
-        Self::hash_to_valid_scalar_inner(input)
-    }
-
-    fn hash_to_valid_scalar_inner(input: &[u8]) -> Result<Scalar, MentalPokerError> {
         const MAX_RETRIES: u32 = 256;
 
         for retry in 0..MAX_RETRIES {
@@ -1310,5 +1306,33 @@ mod tests {
             let bytes: [u8; 33] = card.to_bytes().into();
             assert!(seen_points.insert(bytes), "Duplicate card point detected");
         }
+    }
+
+    #[test]
+    fn test_tampered_shuffle_detection() {
+        let players: Vec<Player> = (0..2).map(Player::new).collect();
+        let shuffle = BayerGrothShuffle::new(&players);
+
+        let ciphertexts: Vec<ElGamalCiphertext> = (0..5)
+            .map(|_| {
+                let msg = ProjectivePoint::GENERATOR * Scalar::random(&mut OsRng);
+                ElGamalCiphertext {
+                    c1: ProjectivePoint::GENERATOR * Scalar::random(&mut OsRng),
+                    c2: msg + (shuffle.public_key_sum * Scalar::random(&mut OsRng)),
+                }
+            })
+            .collect();
+
+        let (mut shuffled, proof) = shuffle
+            .shuffle(&ciphertexts, &mut OsRng)
+            .expect("Shuffle should succeed");
+
+        shuffled[0] = ElGamalCiphertext {
+            c1: ProjectivePoint::GENERATOR,
+            c2: ProjectivePoint::GENERATOR,
+        };
+
+        let result = BayerGrothShuffle::verify_shuffle(&ciphertexts, &shuffled, &proof);
+        assert!(result.is_err(), "Tampered shuffle should fail verification");
     }
 }
