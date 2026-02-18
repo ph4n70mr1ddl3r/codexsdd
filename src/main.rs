@@ -1,3 +1,32 @@
+//! Mental Poker Protocol with Bayer-Groth Verifiable Shuffle
+//!
+//! This crate implements a Mental Poker protocol using the Bayer-Groth
+//! verifiable shuffle scheme on the secp256k1 elliptic curve. Mental Poker
+//! enables distributed card games where players can play without a trusted dealer.
+//!
+//! # Features
+//!
+//! - `ElGamal` encryption on secp256k1
+//! - Zero-knowledge shuffle proofs
+//! - Verifiable deck shuffling
+//! - Secure card dealing
+//!
+//! # Example
+//!
+//! ```no_run
+//! use mental_poker_bayer_groth::{MentalPokerTable, Player, BayerGrothShuffle};
+//!
+//! let mut table = MentalPokerTable::new(2).expect("Failed to create table");
+//! table.shuffle_deck(0).expect("Shuffle failed");
+//! table.verify_last_shuffle().expect("Verification failed");
+//! let card = table.deal_card(0).expect("Deal failed");
+//! ```
+
+#![warn(missing_docs)]
+#![warn(clippy::all)]
+#![warn(clippy::pedantic)]
+#![allow(clippy::module_name_repetitions)]
+
 use k256::elliptic_curve::group::GroupEncoding;
 use k256::elliptic_curve::Field;
 use k256::elliptic_curve::PrimeField;
@@ -22,29 +51,51 @@ const COMPRESSED_POINT_SIZE: usize = 33;
 type Commitments = Vec<ProjectivePoint>;
 type Responses = Vec<Scalar>;
 
+/// Errors that can occur during mental poker protocol execution.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MentalPokerError {
+    /// Deck initialization failed after maximum hash-to-scalar retry attempts.
     #[error("Deck initialization failed after maximum retries")]
     DeckInitializationFailed,
+    /// Proof commitment vector length does not match ciphertext count.
     #[error("Invalid proof: commitment length mismatch (expected {expected}, got {actual})")]
-    InvalidCommitmentLength { expected: usize, actual: usize },
+    InvalidCommitmentLength {
+        /// Expected number of commitments.
+        expected: usize,
+        /// Actual number of commitments provided.
+        actual: usize,
+    },
+    /// Shuffle proof verification failed.
     #[error("Invalid proof: shuffle verification failed")]
     ShuffleVerificationFailed,
+    /// Failed to convert bytes to a valid scalar field element.
     #[error("Scalar conversion failed: invalid field element representation")]
     ScalarConversionFailed,
+    /// Player ID is outside the valid range.
     #[error("Invalid player ID: {0} (valid range: 0..{1})")]
     InvalidPlayerId(usize, usize),
+    /// Duplicate player ID was detected.
     #[error("Duplicate player ID: {0}")]
     DuplicatePlayerId(usize),
+    /// Attempted to deal from an empty deck.
     #[error("Cannot deal card: deck is empty")]
     DeckEmpty,
+    /// Duplicate player IDs detected during initialization.
     #[error("Invalid player initialization: duplicate player IDs detected")]
     DuplicatePlayerIdInitialization,
+    /// Vector length mismatch between expected and actual values.
     #[error("Invalid vector length: expected {expected}, got {actual}")]
-    InvalidVectorLength { expected: String, actual: usize },
+    InvalidVectorLength {
+        /// Expected length description.
+        expected: String,
+        /// Actual length provided.
+        actual: usize,
+    },
+    /// Cannot encrypt the identity point (zero element).
     #[error("Invalid message point: cannot encrypt identity point")]
     InvalidMessagePoint,
+    /// Ciphertext contains invalid curve points.
     #[error("Invalid ciphertext: contains invalid curve point")]
     InvalidCiphertext,
 }
@@ -55,8 +106,11 @@ pub enum MentalPokerError {
 /// - c1 = r * G (random point)
 /// - c2 = m + r * PK (message point plus random multiple of public key)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ElGamalCiphertext {
+    /// Random component: r * G where r is the encryption randomness.
     pub c1: ProjectivePoint,
+    /// Encrypted message component: m + r * PK.
     pub c2: ProjectivePoint,
 }
 
@@ -74,7 +128,9 @@ impl fmt::Display for ElGamalCiphertext {
 /// Key pair for `ElGamal` encryption consisting of secret key and derived public key.
 #[derive(Debug, Clone)]
 pub struct ElGamalKeyPair {
+    /// Public key for encryption: G * `secret_scalar`.
     pub public_key: ProjectivePoint,
+    /// Secret key for decryption.
     secret_key: SecretKey,
 }
 
@@ -576,6 +632,7 @@ impl BayerGrothShuffle {
 ///
 /// Manages players, the deck, encryption keys, and the dealing logic.
 /// The table coordinates between multiple players for secure card shuffling and dealing.
+#[derive(Debug)]
 pub struct MentalPokerTable {
     players: Vec<Player>,
     dealer: ElGamal,
@@ -650,7 +707,7 @@ impl MentalPokerTable {
         &self.encrypted_deck
     }
 
-    /// Returns a reference to the dealer's ElGamal encryption instance
+    /// Returns a reference to the dealer's `ElGamal` encryption instance
     #[must_use]
     #[inline]
     pub fn dealer(&self) -> &ElGamal {
@@ -705,7 +762,7 @@ impl MentalPokerTable {
         let (shuffled, proof) = shuffle.shuffle(&input_deck, &mut OsRng)?;
 
         self.last_shuffle_input = input_deck;
-        self.last_shuffle_output = shuffled.clone();
+        self.last_shuffle_output.clone_from(&shuffled);
         self.shuffled_deck = VecDeque::from(shuffled);
         self.shuffle_proofs.push(proof);
 
@@ -777,6 +834,7 @@ impl MentalPokerTable {
         self.player_hands.get(&player_id).map(Vec::as_slice)
     }
 
+    /// Returns the total number of cards dealt to all players.
     #[must_use]
     #[inline]
     pub fn total_cards_dealt(&self) -> usize {
@@ -1125,7 +1183,7 @@ mod tests {
     #[test]
     fn test_public_key_sum() {
         let players: Vec<Player> = (0..3).map(Player::new).collect();
-        let sum1: ProjectivePoint = players.iter().map(|p| p.public_key()).sum();
+        let sum1: ProjectivePoint = players.iter().map(Player::public_key).sum();
 
         let mut sum2 = ProjectivePoint::IDENTITY;
         for player in &players {
