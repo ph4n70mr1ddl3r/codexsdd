@@ -37,6 +37,7 @@ use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 /// Number of cards in a standard playing card deck
 const DECK_SIZE: usize = 52;
@@ -123,6 +124,13 @@ pub struct ElGamalCiphertext {
     pub c2: ProjectivePoint,
 }
 
+impl Hash for ElGamalCiphertext {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Hash::hash_slice(&self.c1.to_bytes(), state);
+        Hash::hash_slice(&self.c2.to_bytes(), state);
+    }
+}
+
 impl fmt::Display for ElGamalCiphertext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -139,7 +147,6 @@ impl fmt::Display for ElGamalCiphertext {
 pub struct ElGamalKeyPair {
     /// Public key for encryption: G * `secret_scalar`.
     pub public_key: ProjectivePoint,
-    /// Secret key for decryption.
     secret_key: SecretKey,
 }
 
@@ -153,6 +160,13 @@ impl ElGamalKeyPair {
             public_key,
             secret_key,
         }
+    }
+
+    /// Returns a reference to the secret key.
+    #[must_use]
+    #[inline]
+    pub fn secret_key(&self) -> &SecretKey {
+        &self.secret_key
     }
 }
 
@@ -303,6 +317,13 @@ impl Player {
     #[inline]
     pub fn public_key(&self) -> ProjectivePoint {
         self.keypair.public_key
+    }
+
+    /// Returns a reference to the player's key pair.
+    #[must_use]
+    #[inline]
+    pub fn keypair(&self) -> &ElGamalKeyPair {
+        &self.keypair
     }
 }
 
