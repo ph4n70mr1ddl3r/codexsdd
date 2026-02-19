@@ -171,7 +171,8 @@ impl ElGamalKeyPair {
 }
 
 /// `ElGamal` encryption scheme for elliptic curve points.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ElGamal {
     keypair: ElGamalKeyPair,
 }
@@ -281,6 +282,23 @@ impl ShuffleProof {
     }
 }
 
+impl Hash for ShuffleProof {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for pt in &self.a {
+            Hash::hash_slice(&pt.to_bytes(), state);
+        }
+        for pt in &self.b {
+            Hash::hash_slice(&pt.to_bytes(), state);
+        }
+        for s in &self.c {
+            Hash::hash_slice(s.to_bytes().as_ref(), state);
+        }
+        for s in &self.r {
+            Hash::hash_slice(s.to_bytes().as_ref(), state);
+        }
+    }
+}
+
 /// Represents a participant in the mental poker game.
 ///
 /// Each player has a unique ID and their own `ElGamal` key pair
@@ -347,7 +365,8 @@ pub fn compute_public_key_sum(players: &[Player]) -> ProjectivePoint {
 ///
 /// Cards are mapped to curve points using SHA-256 hash-to-point derivation
 /// to ensure uniform distribution on the curve.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Deck {
     cards: Vec<ProjectivePoint>,
 }
@@ -415,6 +434,10 @@ impl Deck {
     }
 }
 
+/// Builds the hash input for Fiat-Shamir challenge derivation.
+///
+/// The input includes a length prefix followed by ciphertext and commitment data,
+/// ensuring proper domain separation to prevent collision attacks.
 fn build_hash_input(
     ciphertexts: &[ElGamalCiphertext],
     commitments_a: &[ProjectivePoint],
@@ -434,8 +457,10 @@ fn build_hash_input(
         });
     }
 
-    let total_size = n * COMPRESSED_POINT_SIZE * 4;
+    let total_size = 8 + n * COMPRESSED_POINT_SIZE * 4;
     let mut hash_input = Vec::with_capacity(total_size);
+
+    hash_input.extend_from_slice(&u64::try_from(n).unwrap_or(u64::MAX).to_le_bytes());
 
     for ct in ciphertexts {
         hash_input.extend_from_slice(&ct.c1.to_bytes());
@@ -473,7 +498,8 @@ impl Deck {
 /// The Bayer-Groth shuffle is a zero-knowledge proof that a permutation
 /// was applied to a sequence of `ElGamal` ciphertexts. This allows multiple
 /// players to shuffle a deck without any single player learning the order.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BayerGrothShuffle {
     public_key_sum: ProjectivePoint,
 }
@@ -684,6 +710,7 @@ impl BayerGrothShuffle {
 /// Manages players, the deck, encryption keys, and the dealing logic.
 /// The table coordinates between multiple players for secure card shuffling and dealing.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct MentalPokerTable {
     players: Vec<Player>,
     dealer: ElGamal,
@@ -1118,11 +1145,13 @@ fn print_summary(num_players: usize, table: &MentalPokerTable) {
     println!("cryptographic review and security hardening.");
 }
 
+/// Formats the first `len` bytes of a byte slice as a hex string.
 fn format_hex_prefix(bytes: &[u8], len: usize) -> String {
     let prefix_len = len.min(bytes.len());
     hex::encode(&bytes[..prefix_len])
 }
 
+/// Formats the last `len` bytes of a byte slice as a hex string.
 fn format_hex_suffix(bytes: &[u8], len: usize) -> String {
     let suffix_len = len.min(bytes.len());
     let suffix_start = bytes.len().saturating_sub(suffix_len);
