@@ -911,7 +911,7 @@ fn run_shuffle_rounds(table: &mut MentalPokerTable, num_players: usize) {
             println!("    Shuffle ERROR: {e}\n");
             continue;
         }
-        let after_count = table.shuffled_deck.len();
+        let after_count = table.shuffled_deck_size();
 
         println!("    Deck size: {before_count} -> {after_count}");
 
@@ -986,7 +986,7 @@ fn run_security_verification(table: &MentalPokerTable) {
     println!("  Cards dealt: {dealt_cards}");
     println!("  Remaining in deck: {final_deck_size}");
     println!(
-        "  Conservation check: {} + {} = {} ✓",
+        "  Conservation check: {} + {} = {} (OK)",
         dealt_cards,
         final_deck_size,
         dealt_cards + final_deck_size
@@ -997,11 +997,7 @@ fn run_security_verification(table: &MentalPokerTable) {
     let shuffle_preserves_all = shuffle_preserves_count && last_shuffle_valid;
     println!(
         "  Shuffle preserves all cards: {}",
-        if shuffle_preserves_all {
-            "YES ✓"
-        } else {
-            "NO ✗"
-        }
+        if shuffle_preserves_all { "YES" } else { "NO" }
     );
 }
 
@@ -1047,13 +1043,13 @@ fn run_shuffle_verification_test() {
 
 fn print_summary(num_players: usize, table: &MentalPokerTable) {
     println!("=== SUMMARY ===");
-    println!("✓ Mental poker protocol initialized with {num_players} players");
-    println!("✓ Deck of {DECK_SIZE} cards encrypted on secp256k1");
+    println!("[OK] Mental poker protocol initialized with {num_players} players");
+    println!("[OK] Deck of {DECK_SIZE} cards encrypted on secp256k1");
     println!(
-        "✓ {} verifiable shuffle rounds completed",
+        "[OK] {} verifiable shuffle rounds completed",
         table.shuffle_proofs_count()
     );
-    println!("✓ Cards dealt to all players with proper encryption");
+    println!("[OK] Cards dealt to all players with proper encryption");
     println!("  (Bayer-Groth zero-knowledge proof verified)");
     println!("\nThe protocol ensures:");
     println!("  - No single player can see card values");
