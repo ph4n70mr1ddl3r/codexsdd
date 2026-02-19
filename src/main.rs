@@ -28,6 +28,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 use k256::elliptic_curve::group::GroupEncoding;
+use k256::elliptic_curve::subtle::ConstantTimeEq;
 use k256::elliptic_curve::Field;
 use k256::elliptic_curve::PrimeField;
 use k256::{ProjectivePoint, Scalar, SecretKey};
@@ -49,6 +50,8 @@ const DEFAULT_DEALING_ROUNDS: usize = 5;
 const COMPRESSED_POINT_SIZE: usize = 33;
 /// Maximum retries for hash-to-scalar conversion
 const MAX_HASH_RETRIES: u32 = 256;
+/// Domain separation tag for Fiat-Shamir challenge
+const FIAT_SHAMIR_DOMAIN_TAG: &[u8] = b"mental-poker-bayer-groth-v1";
 
 type Commitments = Vec<ProjectivePoint>;
 type Responses = Vec<Scalar>;
@@ -98,6 +101,12 @@ pub enum MentalPokerError {
     /// Ciphertext contains invalid curve points.
     #[error("Invalid ciphertext: contains invalid curve point")]
     InvalidCiphertext,
+    /// Player count must be at least one.
+    #[error("Invalid player count: must be at least 1, got {0}")]
+    InvalidPlayerCount(usize),
+    /// Internal state error: player hand not found.
+    #[error("Internal error: player hand not found for player {0}")]
+    PlayerHandNotFound(usize),
 }
 
 /// `ElGamal` ciphertext pair (c1, c2) for elliptic curve encryption.
@@ -524,11 +533,7 @@ impl BayerGrothShuffle {
 
         let hash_input = build_hash_input(&rerandomized, &commitment_a, &commitment_b)?;
 
-        let mut hasher = Sha256::new();
-        hasher.update(&hash_input);
-        let challenge_hash = hasher.finalize();
-        let e = Scalar::from_repr_vartime(challenge_hash)
-            .ok_or(MentalPokerError::ScalarConversionFailed)?;
+        let e = Self::derive_challenge_scalar(&hash_input)?;
 
         let mut c: Vec<Scalar> = Vec::with_capacity(n);
         let mut r: Vec<Scalar> = Vec::with_capacity(n);
@@ -612,7 +617,10 @@ impl BayerGrothShuffle {
         let sum_a: ProjectivePoint = proof.commitments_a().iter().sum();
         let sum_b: ProjectivePoint = proof.commitments_b().iter().sum();
 
-        if diff_c1 == sum_a && diff_c2 == sum_b {
+        let c1_valid = diff_c1.ct_eq(&sum_a);
+        let c2_valid = diff_c2.ct_eq(&sum_b);
+
+        if c1_valid.unwrap_u8() == 1 && c2_valid.unwrap_u8() == 1 {
             Ok(())
         } else {
             Err(MentalPokerError::ShuffleVerificationFailed)
@@ -624,6 +632,29 @@ impl BayerGrothShuffle {
             (ProjectivePoint::IDENTITY, ProjectivePoint::IDENTITY),
             |(sum_c1, sum_c2), (c1, c2)| (sum_c1 + c1, sum_c2 + c2),
         )
+    }
+
+    fn derive_challenge_scalar(hash_input: &[u8]) -> Result<Scalar, MentalPokerError> {
+        for retry in 0..MAX_HASH_RETRIES {
+            let mut hasher = Sha256::new();
+            hasher.update(FIAT_SHAMIR_DOMAIN_TAG);
+            if retry == 0 {
+                hasher.update(hash_input);
+            } else {
+                hasher.update(hash_input);
+                hasher.update(retry.to_le_bytes());
+            }
+            let hash = hasher.finalize();
+            let mut bytes = [0u8; 32];
+            bytes.copy_from_slice(&hash);
+
+            if let Some(scalar) = Scalar::from_repr(bytes.into()).into_option() {
+                if scalar != Scalar::ZERO {
+                    return Ok(scalar);
+                }
+            }
+        }
+        Err(MentalPokerError::ScalarConversionFailed)
     }
 }
 
@@ -651,9 +682,13 @@ impl MentalPokerTable {
     ///
     /// # Errors
     ///
-    /// Returns `MentalPokerError::DuplicatePlayerIdInitialization` if duplicate player IDs are detected.
+    /// Returns `MentalPokerError::InvalidPlayerCount` if `num_players` is zero.
     /// Returns `MentalPokerError::DeckInitializationFailed` if deck creation fails.
     pub fn new(num_players: usize) -> Result<Self, MentalPokerError> {
+        if num_players == 0 {
+            return Err(MentalPokerError::InvalidPlayerCount(num_players));
+        }
+
         let players: Vec<Player> = (0..num_players).map(Player::new).collect();
 
         let deck = Deck::new()?;
@@ -776,7 +811,7 @@ impl MentalPokerTable {
 
         self.last_shuffle_input = input_deck;
         self.last_shuffle_output.clone_from(&shuffled);
-        self.shuffled_deck = VecDeque::from(shuffled);
+        self.shuffled_deck = shuffled.into();
         self.shuffle_proofs.push(proof);
 
         Ok(())
@@ -827,9 +862,11 @@ impl MentalPokerTable {
             .shuffled_deck
             .pop_front()
             .ok_or(MentalPokerError::DeckEmpty)?;
-        if let Some(hand) = self.player_hands.get_mut(&player_id) {
-            hand.push(card);
-        }
+        let hand = self
+            .player_hands
+            .get_mut(&player_id)
+            .ok_or(MentalPokerError::PlayerHandNotFound(player_id))?;
+        hand.push(card);
         Ok(card)
     }
 
@@ -1423,5 +1460,37 @@ mod tests {
     fn test_mental_poker_simulation() {
         let result = run_mental_poker_simulation();
         assert!(result.is_ok(), "Simulation should complete successfully");
+    }
+
+    #[test]
+    fn test_zero_players_fails() {
+        let result = MentalPokerTable::new(0);
+        assert!(result.is_err());
+        assert!(matches!(
+            result,
+            Err(MentalPokerError::InvalidPlayerCount(0))
+        ));
+    }
+
+    #[test]
+    fn test_constant_time_verification() {
+        let players: Vec<Player> = (0..2).map(Player::new).collect();
+        let shuffle = BayerGrothShuffle::new(&players);
+
+        let ciphertexts: Vec<ElGamalCiphertext> = (0..5)
+            .map(|_| {
+                let msg = ProjectivePoint::GENERATOR * Scalar::random(&mut OsRng);
+                ElGamalCiphertext {
+                    c1: ProjectivePoint::GENERATOR * Scalar::random(&mut OsRng),
+                    c2: msg + (shuffle.public_key_sum * Scalar::random(&mut OsRng)),
+                }
+            })
+            .collect();
+
+        let (shuffled, proof) = shuffle
+            .shuffle(&ciphertexts, &mut OsRng)
+            .expect("Shuffle should succeed");
+
+        assert!(BayerGrothShuffle::verify_shuffle(&ciphertexts, &shuffled, &proof).is_ok());
     }
 }
