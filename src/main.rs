@@ -905,7 +905,7 @@ fn run_shuffle_rounds(table: &mut MentalPokerTable, num_players: usize) {
         let player_id = (shuffle_round - 1) % num_players;
         println!("    Shuffler: Player {player_id}");
 
-        let before_count = table.shuffled_deck.len();
+        let before_count = table.shuffled_deck_size();
         if let Err(e) = table.shuffle_deck(player_id) {
             println!("    Shuffle ERROR: {e}\n");
             continue;
@@ -1420,5 +1420,11 @@ mod tests {
 
         let result = BayerGrothShuffle::verify_shuffle(&ciphertexts, &shuffled, &proof);
         assert!(result.is_err(), "Tampered shuffle should fail verification");
+    }
+
+    #[test]
+    fn test_mental_poker_simulation() {
+        let result = run_mental_poker_simulation();
+        assert!(result.is_ok(), "Simulation should complete successfully");
     }
 }
