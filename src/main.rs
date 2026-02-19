@@ -47,6 +47,8 @@ const DEFAULT_SHUFFLE_ROUNDS: usize = 2;
 const DEFAULT_DEALING_ROUNDS: usize = 5;
 /// Size of compressed secp256k1 point in bytes
 const COMPRESSED_POINT_SIZE: usize = 33;
+/// Maximum retries for hash-to-scalar conversion
+const MAX_HASH_RETRIES: u32 = 256;
 
 type Commitments = Vec<ProjectivePoint>;
 type Responses = Vec<Scalar>;
@@ -75,9 +77,7 @@ pub enum MentalPokerError {
     /// Player ID is outside the valid range.
     #[error("Invalid player ID: {0} (valid range: 0..{1})")]
     InvalidPlayerId(usize, usize),
-    /// Duplicate player ID was detected.
-    #[error("Duplicate player ID: {0}")]
-    DuplicatePlayerId(usize),
+
     /// Attempted to deal from an empty deck.
     #[error("Cannot deal card: deck is empty")]
     DeckEmpty,
@@ -126,7 +126,7 @@ impl fmt::Display for ElGamalCiphertext {
 }
 
 /// Key pair for `ElGamal` encryption consisting of secret key and derived public key.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElGamalKeyPair {
     /// Public key for encryption: G * `secret_scalar`.
     pub public_key: ProjectivePoint,
@@ -261,7 +261,7 @@ impl ShuffleProof {
 ///
 /// Each player has a unique ID and their own `ElGamal` key pair
 /// for participating in distributed deck shuffling.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Player {
     id: usize,
     keypair: ElGamalKeyPair,
@@ -354,9 +354,7 @@ impl Deck {
     }
 
     fn hash_to_valid_scalar(input: &[u8]) -> Result<Scalar, MentalPokerError> {
-        const MAX_RETRIES: u32 = 256;
-
-        for retry in 0..MAX_RETRIES {
+        for retry in 0..MAX_HASH_RETRIES {
             let mut hash = [0u8; 32];
             let mut hasher = Sha256::new();
             if retry == 0 {
