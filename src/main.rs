@@ -87,8 +87,8 @@ pub enum MentalPokerError {
     /// Vector length mismatch between expected and actual values.
     #[error("Invalid vector length: expected {expected}, got {actual}")]
     InvalidVectorLength {
-        /// Expected length description.
-        expected: String,
+        /// Expected length.
+        expected: usize,
         /// Actual length provided.
         actual: usize,
     },
@@ -216,6 +216,7 @@ impl ElGamal {
 /// This proof demonstrates that a permutation was applied to ciphertexts
 /// without revealing the permutation itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ShuffleProof {
     /// Commitments to alpha values (`A_i` = `alpha_i` * G)
     a: Commitments,
@@ -392,13 +393,13 @@ fn build_hash_input(
     let n = ciphertexts.len();
     if n != commitments_a.len() {
         return Err(MentalPokerError::InvalidVectorLength {
-            expected: n.to_string(),
+            expected: n,
             actual: commitments_a.len(),
         });
     }
     if n != commitments_b.len() {
         return Err(MentalPokerError::InvalidVectorLength {
-            expected: n.to_string(),
+            expected: n,
             actual: commitments_b.len(),
         });
     }
@@ -584,7 +585,7 @@ impl BayerGrothShuffle {
 
         if n == 0 {
             return Err(MentalPokerError::InvalidVectorLength {
-                expected: "at least 1".to_string(),
+                expected: 1,
                 actual: 0,
             });
         }
